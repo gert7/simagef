@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{mpsc::channel, Arc, RwLock},
-    thread, io::BufRead,
+    thread, io::BufRead, process::exit,
 };
 
 use clap::Parser;
@@ -15,20 +15,22 @@ mod open_image;
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// The amount of similarity as a percentage to be considered similar
+    /// The amount of similarity as a percentage to be considered similar.
     #[arg(short, long, value_parser = clap::value_parser!(u8).range(0..=100))]
     threshold: Option<u8>,
     /// The program to launch when the comparisons are finished.
     /// The program will be launched for each pair or grouping.
     #[arg(long)]
     program: Option<String>,
-    /// Only present the matched images in pairs rather than groups.
+    /// If true, will only present the matched images in pairs rather than groups.
     #[arg(short, long, default_value_t = false)]
     pairs: bool,
     #[arg(long, default_value_t = 160)]
     fingerprint_width: u32,
     #[arg(long, default_value_t = 160)]
     fingerprint_height: u32,
+    /// The files to compare. If one of these is a dash '-' the program will
+    /// also read filenames from stdin.
     files: Vec<String>,
 }
 
@@ -64,6 +66,11 @@ fn main() {
 
     let mut dash_mode = false;
 
+    if cli.files.len() == 0 {
+        eprintln!("No files provided");
+        exit(1);
+    }
+
     for arg_filename in cli.files {
         if arg_filename == "-" {
             dash_mode = true;
@@ -81,7 +88,7 @@ fn main() {
                 match stdin_lock.read_line(&mut buf) {
                     Ok(len) => {
                         if len == 0 {
-                            break;
+                            return;
                         }
                         let slice = buf[0..(len - 1)].to_owned();
                         filename_tx.send(slice).expect("Unable to send filename to channel");
@@ -94,6 +101,8 @@ fn main() {
                 buf.clear();
             }
         });
+    } else {
+        drop(filename_tx);
     }
 
     let image_map: HashMap<String, ImageToCompare> = HashMap::new();
@@ -227,9 +236,18 @@ fn main() {
 
     // println!("Dropped pair_tx");
 
+    eprintln!("\n");
+
+    let mut pairings = Vec::new();
+
     loop {
         match pair_rx.recv() {
-            Ok(pair) => println!("{} {}", pair.filename1, pair.filename2),
+            Ok(pair) => {
+                if cli.pairs {
+                    println!("{} {}", pair.filename1, pair.filename2);
+                }
+                pairings.push(pair);
+            },
             Err(_) => break,
         }
     }
@@ -238,10 +256,10 @@ fn main() {
         thread.join().unwrap();
     }
 
-    // println!("Image maker threads done");
+    // eprintln!("Image maker threads done");
 
     task_master_thread.join().unwrap();
-    // println!("Task master thread done");
+    // eprintln!("Task master thread done");
 
     for thread in compare_threads {
         thread.join().unwrap();
