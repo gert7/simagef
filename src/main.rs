@@ -27,10 +27,10 @@ struct Cli {
     threshold: Option<u8>,
     /// The program to launch when the comparisons are finished.
     /// The program will be launched for each pair or grouping, one after another.
-    #[arg(short('p'), long)]
-    program: Option<String>,
+    #[arg(short('e'), long)]
+    exec: Option<String>,
     /// If true, will only present the matched images in pairs rather than groups.
-    #[arg(short('P'), long, default_value_t = false)]
+    #[arg(short('p'), long, default_value_t = false)]
     pairs: bool,
     /// The width to resize the images to before comparing in pixel mode.
     #[arg(long, default_value_t = 160)]
@@ -393,7 +393,7 @@ fn main_images(cli: Cli) {
         for group in groups {
             let line = group.join(" ");
             println!("{}", line);
-            if let Some(program) = &cli.program {
+            if let Some(program) = &cli.exec {
                 Command::new(program)
                     .args(group)
                     .output()
@@ -592,7 +592,7 @@ fn main_signatures(cli: Cli) {
         for group in groups {
             let line = group.join(" ");
             println!("{}", line);
-            if let Some(program) = &cli.program {
+            if let Some(program) = &cli.exec {
                 Command::new(program)
                     .args(group)
                     .output()
