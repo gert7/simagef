@@ -18,7 +18,7 @@ You can set the threshold of similarity with the `-t` or `--threshold` options:
 simagef -t 50 a.png b.png c.png
 ```
 
-You can read additionally read filenames from `stdin` if `-` appears in the filenames list. For example using it with the `fd` command for finding files:
+You can additionally read filenames from `stdin` if `-` appears in the filenames list. For example using it with the `fd` command for finding files:
 
 ```
 fd . ~/my_images | simages base.png base2.png -
@@ -34,7 +34,7 @@ You can specify an external image viewer for comparing groups of images using `-
 simagef -e gwenview ~/Pictures/*
 ```
 
-This will launch the executable with the groups (or pairs) of filenames as arguments. It will launch the executable for the next group once the previous executable exits.
+This will launch the executable with the groups (or pairs) of filenames as arguments. It will launch the executable again for the next group once the previous executable exits.
 
 ## Caveats
 
