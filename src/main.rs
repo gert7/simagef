@@ -358,7 +358,7 @@ fn main_images(cli: Cli) {
 
     // println!("Dropped pair_tx");
 
-    eprintln!("");
+    // eprintln!("");
 
     let mut pairings = Vec::new();
 
@@ -386,7 +386,7 @@ fn main_images(cli: Cli) {
     for thread in compare_threads {
         thread.join().unwrap();
     }
-    eprintln!("Compare threads done");
+    // eprintln!("Compare threads done");
 
     if !cli.pairs {
         let groups = make_groups(&pairings);
