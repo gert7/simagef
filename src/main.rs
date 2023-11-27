@@ -29,7 +29,7 @@ struct Cli {
     /// The program will be launched for each pair or grouping, one after another.
     #[arg(short('e'), long)]
     exec: Option<String>,
-    /// If true, will only present the matched images in pairs rather than groups.
+    /// If set, will only present the matched images in pairs rather than groups.
     #[arg(short('p'), long, default_value_t = false)]
     pairs: bool,
     /// The width to resize the images to before comparing in pixel mode.

@@ -52,6 +52,9 @@ This will launch the executable with the groups (or pairs) of filenames as argum
 
 ## Caveats
 
+- Comparing a large number of images will fill up your memory.
+
 - The `crossbeam` channels used in the code are unbounded, which I consider to be a bug.
 
 - The groups are created using a recursive graph algorithm.
+
