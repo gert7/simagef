@@ -42,10 +42,10 @@ You can use the (slower) pixel-based algorithm with the `-m` or `--pixels` flag.
 
 If you want only the pairs of images without the groupings, use the `-p` or `--pairs` flag.
 
-You can specify an external image viewer for comparing groups of images using `-e` or `--exec`:
+You can specify an external image viewer for comparing groups of images using `-e` or `--exec`. You can also provide command line arguments:
 
 ```
-simagef -e gwenview ~/Pictures/*
+simagef -e "gwenview -s" ~/Pictures/*
 ```
 
 This will launch the executable with the groups (or pairs) of filenames as arguments. It will launch the executable again for the next group once the previous executable exits.
