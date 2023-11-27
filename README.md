@@ -1,3 +1,7 @@
+![](https://badgers.space/crates/version/simagef)
+
+[]
+
 `simagef` is a CLI tool for finding similar images. It takes a list of image paths and returns either groups or pairs of images that are similar.
 
 It uses the [image-match](https://crates.io/crates/image-match) crate to generate signatures for images and compare them. An option to match images using pixel comparisons via the [image-compare](https://crates.io/crates/image-compare) crate is also available.
