@@ -9,7 +9,7 @@ use std::{
 use clap::Parser;
 use crossbeam::channel::Receiver;
 use image::Rgb;
-use image_match::{image::get_image_signature, cosine_similarity};
+use image_match::{cosine_similarity, image::get_image_signature};
 use open_image::IBoft;
 
 use crate::open_image::{open_image, resize_as_needed};
@@ -197,6 +197,21 @@ fn signature_maker_loop(
     }
 }
 
+fn run_executable(pairings: &Vec<Pairing>, executable: &Option<(&str, Vec<&str>)>) {
+    let groups = make_groups(pairings);
+    for group in groups {
+        let line = group.join(" ");
+        println!("{}", line);
+        if let Some((program, args)) = &executable {
+            Command::new(program)
+                .args(args)
+                .args(group)
+                .output()
+                .expect("Unable to run program provided");
+        }
+    }
+}
+
 fn main_images(cli: Cli) {
     let cpu_count = num_cpus::get();
 
@@ -362,11 +377,26 @@ fn main_images(cli: Cli) {
 
     let mut pairings = Vec::new();
 
+    let executable = {
+        cli.exec.as_ref().map(|exec| {
+            let mut split = exec.split(" ").into_iter();
+            let command = split.next().expect("Command for exec not provided");
+            let rest: Vec<&str> = split.collect();
+            (command, rest)
+        })
+    };
+
     loop {
         match pair_rx.recv() {
             Ok(pair) => {
                 if cli.pairs {
                     println!("{} {}", pair.filename1, pair.filename2);
+                    if let Some((program, args)) = &executable {
+                        Command::new(program)
+                            .args(args)
+                            .output()
+                            .expect("Unable to run executable provided");
+                    }
                 }
                 pairings.push(pair);
             }
@@ -389,17 +419,7 @@ fn main_images(cli: Cli) {
     // eprintln!("Compare threads done");
 
     if !cli.pairs {
-        let groups = make_groups(&pairings);
-        for group in groups {
-            let line = group.join(" ");
-            println!("{}", line);
-            if let Some(program) = &cli.exec {
-                Command::new(program)
-                    .args(group)
-                    .output()
-                    .expect("Unable to run program provided");
-            }
-        }
+        run_executable(&pairings, &executable);
     }
 }
 
@@ -418,12 +438,12 @@ fn main_signatures(cli: Cli) {
         exit(1);
     }
 
-    for arg_filename in cli.files {
+    for arg_filename in &cli.files {
         if arg_filename == "-" {
             dash_mode = true;
         } else {
             filename_tx
-                .send(arg_filename)
+                .send(arg_filename.clone())
                 .expect("Unable to send filename to channel");
         }
     }
@@ -557,15 +577,30 @@ fn main_signatures(cli: Cli) {
 
     // println!("Dropped pair_tx");
 
-    eprintln!("");
+    // eprintln!("");
 
     let mut pairings = Vec::new();
+
+    let executable = {
+        cli.exec.as_ref().map(|exec| {
+            let mut split = exec.split(" ").into_iter();
+            let command = split.next().expect("Command for exec not provided");
+            let rest: Vec<&str> = split.collect();
+            (command, rest)
+        })
+    };
 
     loop {
         match pair_rx.recv() {
             Ok(pair) => {
                 if cli.pairs {
                     println!("{} {}", pair.filename1, pair.filename2);
+                    if let Some((program, args)) = &executable {
+                        Command::new(program)
+                            .args(args)
+                            .output()
+                            .expect("Unable to run executable provided");
+                    }
                 }
                 pairings.push(pair);
             }
@@ -585,20 +620,10 @@ fn main_signatures(cli: Cli) {
     for thread in compare_threads {
         thread.join().unwrap();
     }
-    eprintln!("Compare threads done");
+    // eprintln!("Compare threads done");
 
     if !cli.pairs {
-        let groups = make_groups(&pairings);
-        for group in groups {
-            let line = group.join(" ");
-            println!("{}", line);
-            if let Some(program) = &cli.exec {
-                Command::new(program)
-                    .args(group)
-                    .output()
-                    .expect("Unable to run program provided");
-            }
-        }
+        run_executable(&pairings, &executable);
     }
 }
 
