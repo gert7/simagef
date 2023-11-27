@@ -1,6 +1,4 @@
-![](https://badgers.space/crates/version/simagef)
-
-[]
+[![Crates.io](https://img.shields.io/crates/v/simagef.svg)](https://crates.io/crates/simagef)
 
 `simagef` is a CLI tool for finding similar images. It takes a list of image paths and returns either groups or pairs of images that are similar.
 
