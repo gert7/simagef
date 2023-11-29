@@ -1,46 +1,29 @@
-use std::{
-    collections::HashMap,
-    io::BufRead,
-    process::{exit, Command},
-    sync::{mpsc::channel, Arc, RwLock},
-    thread,
-};
+use std::{process::{exit, Command}, thread, io::BufRead, collections::HashMap, sync::{Arc, RwLock, mpsc::channel}};
 
-use clap::Parser;
-use cli::Cli;
 use crossbeam::channel::Receiver;
-use image_match::{cosine_similarity, image::get_image_signature};
-use main_image::main_images;
-use open_image::SingleImage;
-use shared::{CompareTask, Pairing, run_executable};
+use image::Rgb;
 
-use crate::open_image::open_image;
-
-mod cli;
-mod main_image;
-mod open_image;
-mod shared;
-
-struct SignatureToCompare {
+use crate::{cli::Cli, open_image::{open_image, resize_as_needed, IBoft, SingleImage}, shared::{CompareTask, Pairing, run_executable}};
+struct ImageToCompare {
     path: String,
-    signature: Vec<i8>,
+    image: IBoft,
 }
 
-impl<'a> SingleImage<'a, Vec<i8>> for SignatureToCompare {
+impl<'a> SingleImage<'a, IBoft> for ImageToCompare {
     fn path(&'a self) -> &'a str {
         &self.path
     }
 
-    fn content(&'a self) -> &Vec<i8> {
-        &self.signature
+    fn content(&'a self) -> &IBoft {
+        &self.image
     }
 }
 
-
-
-fn signature_maker_loop(
+fn image_maker_loop(
     filename_rx: Receiver<String>,
-    tx: std::sync::mpsc::Sender<SignatureToCompare>,
+    tx: std::sync::mpsc::Sender<ImageToCompare>,
+    width: u32,
+    height: u32,
 ) {
     loop {
         match filename_rx.recv() {
@@ -48,12 +31,12 @@ fn signature_maker_loop(
                 let image = open_image(&filename);
                 match image {
                     Ok(image) => {
-                        let signature = get_image_signature(image);
-                        tx.send(SignatureToCompare {
+                        let image = resize_as_needed(image, width, height);
+                        tx.send(ImageToCompare {
                             path: filename,
-                            signature,
+                            image,
                         })
-                        .expect("Unable to send signature to channel");
+                        .expect("Unable to send image to channel");
                     }
                     Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
                 }
@@ -67,8 +50,10 @@ fn signature_maker_loop(
     }
 }
 
-fn main_signatures(cli: Cli) {
+pub fn main_images(cli: Cli) {
     let cpu_count = num_cpus::get();
+
+    let white = Rgb([255, 255, 255]);
 
     let threshold: f64 = cli.threshold.unwrap_or(90).into();
     let threshold = threshold * 0.01;
@@ -82,12 +67,12 @@ fn main_signatures(cli: Cli) {
         exit(1);
     }
 
-    for arg_filename in &cli.files {
+    for arg_filename in cli.files {
         if arg_filename == "-" {
             dash_mode = true;
         } else {
             filename_tx
-                .send(arg_filename.clone())
+                .send(arg_filename)
                 .expect("Unable to send filename to channel");
         }
     }
@@ -119,7 +104,7 @@ fn main_signatures(cli: Cli) {
         drop(filename_tx);
     }
 
-    let image_map: HashMap<String, SignatureToCompare> = HashMap::new();
+    let image_map: HashMap<String, ImageToCompare> = HashMap::new();
     let image_map = Arc::new(RwLock::new(image_map));
     // let mut image_pairs = Vec::new();
 
@@ -131,7 +116,7 @@ fn main_signatures(cli: Cli) {
         let filename_rx = filename_rx.clone();
         let tx = img_tx.clone();
         image_maker_threads.push(thread::spawn(move || {
-            signature_maker_loop(filename_rx, tx);
+            image_maker_loop(filename_rx, tx, cli.width, cli.height);
         }));
     }
 
@@ -180,7 +165,7 @@ fn main_signatures(cli: Cli) {
 
     let mut compare_threads = Vec::new();
 
-    for _ in 0..1 {
+    for _ in 0..cpu_count {
         let task_rx = task_rx.clone();
         let image_map = image_map.clone();
         let pair_tx = pair_tx.clone();
@@ -192,12 +177,17 @@ fn main_signatures(cli: Cli) {
                         let image2 = &image_map[&task.filename2];
                         // println!("Doing task {} {}", image1.path, image2.path);
 
-                        let result = cosine_similarity(&image1.signature, &image2.signature);
+                        let result = image_compare::rgba_blended_hybrid_compare(
+                            (&image1.image).into(),
+                            (&image2.image).into(),
+                            white,
+                        )
+                        .expect("Resized images have different dimensions somehow.");
 
                         let pairing = Pairing {
                             filename1: task.filename1.clone(),
                             filename2: task.filename2.clone(),
-                            score: result,
+                            score: result.score,
                         };
 
                         if pairing.score > threshold {
@@ -270,18 +260,3 @@ fn main_signatures(cli: Cli) {
         run_executable(&pairings, &executable);
     }
 }
-
-fn main() {
-    let cli = Cli::parse();
-    if cli.pixels {
-        main_images(cli);
-    } else {
-        main_signatures(cli);
-    }
-}
-
-// fn main() {
-//     let pairs = vec![("A", "B"), ("B", "C"), ("D", "E"), ("D", "F"), ("D", "G")];
-//     let result = make_groups(&pairs);
-//     println!("{:?}", result);
-// }

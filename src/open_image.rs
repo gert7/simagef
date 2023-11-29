@@ -3,6 +3,12 @@ use image::{ImageBuffer, Rgba, ImageResult};
 /** Image buffer of type. */
 pub type IBoft = ImageBuffer<Rgba<u8>, Vec<u8>>;
 
+pub trait SingleImage<'a, T> {
+    fn path(&'a self) -> &'a str;
+
+    fn content(&'a self) -> &T;
+}
+
 pub fn open_image(filename: &str) -> ImageResult<IBoft> {
     Ok(image::open(filename)?.into_rgba8())
 }
