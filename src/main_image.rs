@@ -3,7 +3,7 @@ use std::{process::{exit, Command}, thread, io::BufRead, collections::HashMap, s
 use crossbeam::channel::Receiver;
 use image::Rgb;
 
-use crate::{cli::Cli, open_image::{open_image, resize_as_needed, IBoft, SingleImage}, shared::{CompareTask, Pairing, run_executable}};
+use crate::{cli::Cli, open_image::{open_image, resize_as_needed, IBoft, SingleImage}, shared::{CompareTask, Pairing, make_groups_and_exec}};
 struct ImageToCompare {
     path: String,
     image: IBoft,
@@ -46,6 +46,20 @@ fn image_maker_loop(
                 drop(filename_rx);
                 return;
             }
+        }
+    }
+}
+
+struct ImageBundle {
+    image_map: Vec<ImageToCompare>,
+    name_map: HashMap<String, usize>,
+}
+
+impl ImageBundle {
+    fn new() -> ImageBundle {
+        ImageBundle {
+            image_map: Vec::new(),
+            name_map: HashMap::new(),
         }
     }
 }
@@ -104,9 +118,11 @@ pub fn main_images(cli: Cli) {
         drop(filename_tx);
     }
 
-    let image_map: HashMap<String, ImageToCompare> = HashMap::new();
-    let image_map = Arc::new(RwLock::new(image_map));
+    // let image_map: HashMap<String, ImageToCompare> = HashMap::new();
+    // let image_map = Arc::new(RwLock::new(image_map));
     // let mut image_pairs = Vec::new();
+    let bundle = ImageBundle::new();
+    let bundle = Arc::new(RwLock::new(bundle));
 
     let (img_tx, img_rx) = channel();
 
@@ -125,28 +141,32 @@ pub fn main_images(cli: Cli) {
     // Image task channel
     let (task_tx, task_rx) = crossbeam::channel::unbounded();
 
-    let image_map_arc = image_map.clone();
+    let bundle_arc = bundle.clone();
     let task_master_thread = thread::spawn(move || {
         loop {
             match img_rx.recv() {
                 Ok(image) => {
-                    match image_map_arc.write() {
-                        Ok(mut image_map) => {
-                            if image_map.contains_key(image.path()) {
+                    match bundle_arc.write() {
+                        Ok(mut bundle) => {
+                            if bundle.name_map.contains_key(image.path()) {
                                 eprintln!("Image already in list: {}", image.path());
                                 continue;
                             }
-                            let filename1 = image.path().to_owned();
-                            for (filename2, _) in image_map.iter() {
-                                // println!("Image task created for {} {}", filename1, filename2);
-                                task_tx
-                                    .send(CompareTask {
-                                        filename1: filename1.clone(),
-                                        filename2: filename2.clone(),
-                                    })
-                                    .unwrap();
+
+                            let index1 = bundle.image_map.len(); // 3
+
+                            for (index2, _) in bundle.image_map.iter().enumerate() {
+                                task_tx.send(
+                                    CompareTask {
+                                        index1,
+                                        index2,
+                                    }
+                                ).expect("Unable to send to task channel!");
+                                // println!("Image task created for {} {}", index1, index2);
                             }
-                            image_map.insert(image.path().to_owned(), image);
+
+                            bundle.name_map.insert(image.path.clone(), index1);
+                            bundle.image_map.push(image);
                         }
                         Err(err) => panic!("Unable to lock image map: {}", err),
                     };
@@ -167,14 +187,14 @@ pub fn main_images(cli: Cli) {
 
     for _ in 0..cpu_count {
         let task_rx = task_rx.clone();
-        let image_map = image_map.clone();
+        let bundle = bundle.clone();
         let pair_tx = pair_tx.clone();
         compare_threads.push(thread::spawn(move || loop {
             match task_rx.recv() {
-                Ok(task) => match image_map.read() {
-                    Ok(image_map) => {
-                        let image1 = &image_map[&task.filename1];
-                        let image2 = &image_map[&task.filename2];
+                Ok(task) => match bundle.read() {
+                    Ok(bundle) => {
+                        let image1 = &bundle.image_map[task.index1];
+                        let image2 = &bundle.image_map[task.index2];
                         // println!("Doing task {} {}", image1.path, image2.path);
 
                         let result = image_compare::rgba_blended_hybrid_compare(
@@ -185,8 +205,8 @@ pub fn main_images(cli: Cli) {
                         .expect("Resized images have different dimensions somehow.");
 
                         let pairing = Pairing {
-                            filename1: task.filename1.clone(),
-                            filename2: task.filename2.clone(),
+                            index1: task.index1,
+                            index2: task.index2,
                             score: result.score,
                         };
 
@@ -224,14 +244,22 @@ pub fn main_images(cli: Cli) {
         })
     };
 
+    // If we use pairs, we execute for each pair right away.
     loop {
         match pair_rx.recv() {
             Ok(pair) => {
                 if cli.pairs {
-                    println!("{} {}", pair.filename1, pair.filename2);
+                    let bundle = bundle
+                        .read()
+                        .expect("Unable to read image bundle for pairs");
+                    let filename1 = bundle.image_map[pair.index1].path.clone();
+                    let filename2 = bundle.image_map[pair.index2].path.clone();
+                    println!("{} {}", filename1, filename2);
                     if let Some((program, args)) = &executable {
                         Command::new(program)
                             .args(args)
+                            .arg(filename1)
+                            .arg(filename2)
                             .output()
                             .expect("Unable to run executable provided");
                     }
@@ -256,7 +284,15 @@ pub fn main_images(cli: Cli) {
     }
     // eprintln!("Compare threads done");
 
+    let bundle = bundle
+        .read()
+        .expect("Unable to read image bundle after all threads have completed.");
+
+    let name_map: Vec<String> = bundle.image_map.iter().map(|s| {
+        s.path.clone()
+    }).collect();
+
     if !cli.pairs {
-        run_executable(&pairings, &executable);
+        make_groups_and_exec(&name_map, &pairings, &executable);
     }
 }

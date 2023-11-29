@@ -12,7 +12,7 @@ use crossbeam::channel::Receiver;
 use image_match::{cosine_similarity, image::get_image_signature};
 use main_image::main_images;
 use open_image::SingleImage;
-use shared::{CompareTask, Pairing, run_executable};
+use shared::{make_groups_and_exec, CompareTask, Pairing};
 
 use crate::open_image::open_image;
 
@@ -35,8 +35,6 @@ impl<'a> SingleImage<'a, Vec<i8>> for SignatureToCompare {
         &self.signature
     }
 }
-
-
 
 fn signature_maker_loop(
     filename_rx: Receiver<String>,
@@ -63,6 +61,22 @@ fn signature_maker_loop(
                 drop(filename_rx);
                 return;
             }
+        }
+    }
+}
+
+/// A vector of image paths and their signatures. Also contains a HashMap of
+/// paths to indices in that vector to quickly check for duplicates.
+struct SignatureBundle {
+    image_map: Vec<SignatureToCompare>,
+    name_map: HashMap<String, usize>,
+}
+
+impl SignatureBundle {
+    fn new() -> SignatureBundle {
+        SignatureBundle {
+            image_map: Vec::new(),
+            name_map: HashMap::new(),
         }
     }
 }
@@ -119,9 +133,12 @@ fn main_signatures(cli: Cli) {
         drop(filename_tx);
     }
 
-    let image_map: HashMap<String, SignatureToCompare> = HashMap::new();
-    let image_map = Arc::new(RwLock::new(image_map));
+    // let image_map: Vec<SignatureToCompare> = Vec::new();
+    // let image_map = Arc::new(RwLock::new(image_map));
+    // let name_map: HashMap<String, usize> = HashMap::new();
     // let mut image_pairs = Vec::new();
+    let bundle = SignatureBundle::new();
+    let bundle = Arc::new(RwLock::new(bundle));
 
     let (img_tx, img_rx) = channel();
 
@@ -129,9 +146,9 @@ fn main_signatures(cli: Cli) {
 
     for _ in 0..cpu_count {
         let filename_rx = filename_rx.clone();
-        let tx = img_tx.clone();
+        let img_tx = img_tx.clone();
         image_maker_threads.push(thread::spawn(move || {
-            signature_maker_loop(filename_rx, tx);
+            signature_maker_loop(filename_rx, img_tx);
         }));
     }
 
@@ -140,28 +157,29 @@ fn main_signatures(cli: Cli) {
     // Image task channel
     let (task_tx, task_rx) = crossbeam::channel::unbounded();
 
-    let image_map_arc = image_map.clone();
+    let bundle_arc = bundle.clone();
     let task_master_thread = thread::spawn(move || {
         loop {
             match img_rx.recv() {
                 Ok(image) => {
-                    match image_map_arc.write() {
-                        Ok(mut image_map) => {
-                            if image_map.contains_key(image.path()) {
+                    match bundle_arc.write() {
+                        Ok(mut bundle) => {
+                            if bundle.name_map.contains_key(image.path()) {
                                 eprintln!("Image already in list: {}", image.path());
                                 continue;
                             }
-                            let filename1 = image.path().to_owned();
-                            for (filename2, _) in image_map.iter() {
-                                // println!("Image task created for {} {}", filename1, filename2);
+
+                            let index1 = bundle.image_map.len(); // 3
+
+                            for (index2, _) in bundle.image_map.iter().enumerate() {
                                 task_tx
-                                    .send(CompareTask {
-                                        filename1: filename1.clone(),
-                                        filename2: filename2.clone(),
-                                    })
-                                    .unwrap();
+                                    .send(CompareTask { index1, index2 })
+                                    .expect("Unable to send to task channel!");
+                                // println!("Image task created for {} {}", index1, index2);
                             }
-                            image_map.insert(image.path().to_owned(), image);
+
+                            bundle.name_map.insert(image.path.clone(), index1);
+                            bundle.image_map.push(image);
                         }
                         Err(err) => panic!("Unable to lock image map: {}", err),
                     };
@@ -182,21 +200,21 @@ fn main_signatures(cli: Cli) {
 
     for _ in 0..1 {
         let task_rx = task_rx.clone();
-        let image_map = image_map.clone();
+        let bundle = bundle.clone();
         let pair_tx = pair_tx.clone();
         compare_threads.push(thread::spawn(move || loop {
             match task_rx.recv() {
-                Ok(task) => match image_map.read() {
-                    Ok(image_map) => {
-                        let image1 = &image_map[&task.filename1];
-                        let image2 = &image_map[&task.filename2];
+                Ok(task) => match bundle.read() {
+                    Ok(bundle) => {
+                        let image1 = &bundle.image_map[task.index1];
+                        let image2 = &bundle.image_map[task.index2];
                         // println!("Doing task {} {}", image1.path, image2.path);
 
                         let result = cosine_similarity(&image1.signature, &image2.signature);
 
                         let pairing = Pairing {
-                            filename1: task.filename1.clone(),
-                            filename2: task.filename2.clone(),
+                            index1: task.index1,
+                            index2: task.index2,
                             score: result,
                         };
 
@@ -234,14 +252,22 @@ fn main_signatures(cli: Cli) {
         })
     };
 
+    // If we use pairs, we execute for each pair right away.
     loop {
         match pair_rx.recv() {
             Ok(pair) => {
                 if cli.pairs {
-                    println!("{} {}", pair.filename1, pair.filename2);
+                    let bundle = bundle
+                        .read()
+                        .expect("Unable to read image bundle for pairs");
+                    let filename1 = bundle.image_map[pair.index1].path.clone();
+                    let filename2 = bundle.image_map[pair.index2].path.clone();
+                    println!("{} {}", filename1, filename2);
                     if let Some((program, args)) = &executable {
                         Command::new(program)
                             .args(args)
+                            .arg(filename1)
+                            .arg(filename2)
                             .output()
                             .expect("Unable to run executable provided");
                     }
@@ -266,8 +292,14 @@ fn main_signatures(cli: Cli) {
     }
     // eprintln!("Compare threads done");
 
+    let bundle = bundle
+        .read()
+        .expect("Unable to read image bundle after all threads have completed.");
+
+    let name_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
+
     if !cli.pairs {
-        run_executable(&pairings, &executable);
+        make_groups_and_exec(&name_map, &pairings, &executable);
     }
 }
 
