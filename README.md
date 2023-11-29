@@ -7,6 +7,10 @@ It uses the [image-match](https://crates.io/crates/image-match) crate to generat
 
 `simagef` is faster than the [findimagedupes](https://github.com/jhnc/findimagedupes) Perl script, but might not produce identical results - not even across the signature/pixel modes, and is not designed to be a drop-in replacement.
 
+## Performance
+
+With default settings on a laptop with an Intel Core i7-11800-H processor, `simagef` can compare 12,399 small-to-medium sized images in 47 seconds, for a total of 76,861,401 comparisons.
+
 ## Installation
 
 Install on Arch Linux:
@@ -55,9 +59,6 @@ This will launch the executable with the groups (or pairs) of filenames as argum
 
 ## Caveats
 
-- CPU utilization could be much better
-
 - The `crossbeam` channels used in the code are unbounded, which I consider to be a bug.
 
 - The groups are created using a recursive graph algorithm.
-
