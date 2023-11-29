@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io::BufRead,
     process::{exit, Command},
-    sync::{mpsc::channel, Arc, RwLock, atomic::AtomicU64},
+    sync::{mpsc::channel, Arc, RwLock},
     thread,
 };
 
@@ -198,13 +198,10 @@ fn main_signatures(cli: Cli) {
 
     let mut compare_threads = Vec::new();
 
-    let count: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-
     for _ in 0..cpu_count {
         let task_rx = task_rx.clone();
         let bundle = bundle.clone();
         let pair_tx = pair_tx.clone();
-        let count_arc = count.clone();
         compare_threads.push(thread::spawn(move || loop {
             match task_rx.recv() {
                 Ok(task) => match bundle.read() {
@@ -220,8 +217,6 @@ fn main_signatures(cli: Cli) {
                             index2: task.index2,
                             score: result,
                         };
-
-                        count_arc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                         if pairing.score > threshold {
                             pair_tx
@@ -307,8 +302,6 @@ fn main_signatures(cli: Cli) {
         println!("make_groups_and_exec");
         make_groups_and_exec(&name_map, &pairings, &executable);
     }
-
-    println!("Number of comparisons: {}", count.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 fn main() {
