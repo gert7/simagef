@@ -299,7 +299,6 @@ fn main_signatures(cli: Cli) {
     let name_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
 
     if !cli.pairs {
-        println!("make_groups_and_exec");
         make_groups_and_exec(&name_map, &pairings, &executable);
     }
 }
