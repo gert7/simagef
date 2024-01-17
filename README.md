@@ -13,16 +13,16 @@ With default settings on a laptop with an Intel Core i7-11800-H processor, `sima
 
 ## Installation
 
+Install via cargo on most platforms:
+
+```
+cargo install simagef
+```
+
 Install on Arch Linux:
 
 ```
 yay simagef-bin
-```
-
-Install via cargo:
-
-```
-cargo install simagef
 ```
 
 ## Usage
