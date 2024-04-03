@@ -18,7 +18,7 @@ pub struct Pairing {
 
 pub fn make_groups_and_exec(
     name_map: &Vec<String>,
-    pairings: &Vec<Pairing>,
+    pairings: Vec<Pairing>,
     executable: &Option<(&str, Vec<&str>)>,
 ) {
     let groups = make_groups(pairings);
@@ -38,7 +38,7 @@ pub fn make_groups_and_exec(
     }
 }
 
-pub fn make_groups<'a>(pairs: &Vec<Pairing>) -> Vec<Vec<usize>> {
+pub fn make_groups<'a>(pairs: Vec<Pairing>) -> Vec<Vec<usize>> {
     let mut graph: HashMap<usize, Vec<usize>> = HashMap::new();
 
     // Build the graph

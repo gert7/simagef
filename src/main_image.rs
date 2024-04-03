@@ -293,6 +293,6 @@ pub fn main_images(cli: Cli) {
     }).collect();
 
     if !cli.pairs {
-        make_groups_and_exec(&name_map, &pairings, &executable);
+        make_groups_and_exec(&name_map, pairings, &executable);
     }
 }

@@ -296,10 +296,10 @@ fn main_signatures(cli: Cli) {
         .read()
         .expect("Unable to read image bundle after all threads have completed.");
 
-    let name_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
+    let image_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
 
     if !cli.pairs {
-        make_groups_and_exec(&name_map, &pairings, &executable);
+        make_groups_and_exec(&image_map, pairings, &executable);
     }
 }
 
