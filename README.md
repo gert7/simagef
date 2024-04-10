@@ -44,7 +44,7 @@ simagef -t 50 a.png b.png c.png
 You can additionally read filenames from `stdin` if `-` appears in the filenames list. For example using it with the `fd` command for finding files:
 
 ```
-fd . ~/my_images | simages base.png base2.png -
+fd . ~/my_images | simagef base.png base2.png -
 ```
 
 You can use the (slower) pixel-based algorithm with the `-m` or `--pixels` flag.
