@@ -9,7 +9,9 @@ It uses the [image-match](https://crates.io/crates/image-match) crate to generat
 
 ## Performance
 
-With default settings on a laptop with an Intel Core i7-11800-H processor, `simagef` can compare 12,399 small-to-medium sized images in 47 seconds, for a total of 76,861,401 comparisons.
+Comparing 10,198 small to medium sized images, simagef takes 40 seconds while findimagedupes takes 1 minute 44 seconds.
+
+![](https://i.gyazo.com/4a3508da851cf2b2b731223571a3782b.png)
 
 ## Installation
 
