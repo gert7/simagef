@@ -10,6 +10,7 @@ use clap::Parser;
 use cli::Cli;
 use crossbeam::channel::Receiver;
 use image_match::{cosine_similarity, image::get_image_signature};
+#[cfg(feature = "pixel")]
 use main_image::main_images;
 use open_image::SingleImage;
 use shared::{make_groups_and_exec, CompareTask, Pairing};
@@ -303,6 +304,7 @@ fn main_signatures(cli: Cli) {
     }
 }
 
+#[cfg(feature = "pixel")]
 fn main() {
     let cli = Cli::parse();
     if cli.pixels {
@@ -310,4 +312,9 @@ fn main() {
     } else {
         main_signatures(cli);
     }
+}
+
+#[cfg(not(feature = "pixel"))]
+fn main() {
+    main_signatures(Cli::parse());
 }

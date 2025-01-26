@@ -20,5 +20,13 @@ image-compare = "0.3.1"
 image-match = { version = "0.2.3", features = ["img"] }
 num_cpus = "1.16.0"
 
+[features]
+pixel = []
+
 # [profile.release]
-# debug = true
+# opt-level = 3
+# debug = false
+# overflow-checks = false
+# strip = "none"
+# lto = "thin"
+
