@@ -32,7 +32,7 @@ impl<'a> SingleImage<'a, Vec<i8>> for SignatureToCompare {
         &self.path
     }
 
-    fn content(&'a self) -> &Vec<i8> {
+    fn content(&self) -> &Vec<i8> {
         &self.signature
     }
 }
