@@ -1,14 +1,13 @@
 use std::{
-    collections::HashMap,
     io::BufRead,
     process::{exit, Command},
-    sync::{mpsc::channel, Arc, RwLock},
+    sync::{Arc, RwLock},
     thread,
 };
 
 use clap::Parser;
 use cli::Cli;
-use crossbeam::channel::Receiver;
+use crossbeam::channel::{Receiver, Sender};
 use image_match::{cosine_similarity, image::get_image_signature};
 #[cfg(feature = "pixel")]
 use main_image::main_images;
@@ -39,7 +38,7 @@ impl<'a> SingleImage<'a, Vec<i8>> for SignatureToCompare {
 
 fn signature_maker_loop(
     filename_rx: Receiver<String>,
-    tx: std::sync::mpsc::Sender<SignatureToCompare>,
+    tx: Sender<SignatureToCompare>,
 ) {
     loop {
         match filename_rx.recv() {
@@ -70,17 +69,19 @@ fn signature_maker_loop(
 /// paths to indices in that vector to quickly check for duplicates.
 struct SignatureBundle {
     image_map: Vec<SignatureToCompare>,
-    name_map: HashMap<String, usize>,
+    // name_map: HashMap<String, usize>,
 }
 
 impl SignatureBundle {
     fn new() -> SignatureBundle {
         SignatureBundle {
             image_map: Vec::new(),
-            name_map: HashMap::new(),
+            // name_map: HashMap::new(),
         }
     }
 }
+
+const CHANNEL_BOUND: usize = 2048;
 
 fn main_signatures(cli: Cli) {
     let cpu_count = num_cpus::get();
@@ -88,7 +89,7 @@ fn main_signatures(cli: Cli) {
     let threshold: f64 = cli.threshold.unwrap_or(90).into();
     let threshold = threshold * 0.01;
 
-    let (filename_tx, filename_rx) = crossbeam::channel::unbounded();
+    let (filename_tx, filename_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
     let mut dash_mode = false;
 
@@ -134,14 +135,10 @@ fn main_signatures(cli: Cli) {
         drop(filename_tx);
     }
 
-    // let image_map: Vec<SignatureToCompare> = Vec::new();
-    // let image_map = Arc::new(RwLock::new(image_map));
-    // let name_map: HashMap<String, usize> = HashMap::new();
-    // let mut image_pairs = Vec::new();
     let bundle = SignatureBundle::new();
     let bundle = Arc::new(RwLock::new(bundle));
 
-    let (img_tx, img_rx) = channel();
+    let (img_tx, img_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
     let mut image_maker_threads = Vec::new();
 
@@ -156,7 +153,7 @@ fn main_signatures(cli: Cli) {
     drop(img_tx);
 
     // Image task channel
-    let (task_tx, task_rx) = crossbeam::channel::unbounded();
+    let (task_tx, task_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
     let bundle_arc = bundle.clone();
     let task_master_thread = thread::spawn(move || {
@@ -165,28 +162,26 @@ fn main_signatures(cli: Cli) {
                 Ok(image) => {
                     match bundle_arc.write() {
                         Ok(mut bundle) => {
-                            if bundle.name_map.contains_key(image.path()) {
-                                eprintln!("Image already in list: {}", image.path());
-                                continue;
-                            }
-
                             let index1 = bundle.image_map.len(); // 3
 
-                            for (index2, _) in bundle.image_map.iter().enumerate() {
-                                task_tx
-                                    .send(CompareTask { index1, index2 })
-                                    .expect("Unable to send to task channel!");
-                                // println!("Image task created for {} {}", index1, index2);
-                            }
-
-                            bundle.name_map.insert(image.path.clone(), index1);
+                            let to_send: Vec<_> = bundle
+                                .image_map
+                                .iter()
+                                .enumerate()
+                                .map(|(index2, _)| CompareTask { index1, index2 })
+                                .collect();
                             bundle.image_map.push(image);
+
+                            drop(bundle);
+
+                            for task in to_send {
+                                task_tx.send(task).expect("Unable to send to task channel!");
+                            }
                         }
                         Err(err) => panic!("Unable to lock image map: {}", err),
                     };
                 }
                 Err(_) => {
-                    // println!("Task master complete");
                     drop(img_rx);
                     return;
                 }
@@ -195,7 +190,7 @@ fn main_signatures(cli: Cli) {
     });
 
     // Image pairing channel
-    let (pair_tx, pair_rx) = crossbeam::channel::unbounded();
+    let (pair_tx, pair_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
     let mut compare_threads = Vec::new();
 
@@ -209,7 +204,6 @@ fn main_signatures(cli: Cli) {
                     Ok(bundle) => {
                         let image1 = &bundle.image_map[task.index1];
                         let image2 = &bundle.image_map[task.index2];
-                        // println!("Doing task {} {}", image1.path, image2.path);
 
                         let result = cosine_similarity(&image1.signature, &image2.signature);
 
@@ -228,7 +222,6 @@ fn main_signatures(cli: Cli) {
                     Err(e) => panic!("{}", e),
                 },
                 Err(_) => {
-                    // println!("Finished compare thread");
                     drop(task_rx);
                     return;
                 }
@@ -237,10 +230,6 @@ fn main_signatures(cli: Cli) {
     }
 
     drop(pair_tx);
-
-    // println!("Dropped pair_tx");
-
-    // eprintln!("");
 
     let mut pairings = Vec::new();
 
