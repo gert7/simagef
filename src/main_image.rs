@@ -14,7 +14,7 @@ impl<'a> SingleImage<'a, IBoft> for ImageToCompare {
         &self.path
     }
 
-    fn content(&'a self) -> &IBoft {
+    fn content(&'a self) -> &'a IBoft {
         &self.image
     }
 }
