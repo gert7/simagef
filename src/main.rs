@@ -60,7 +60,7 @@ fn signature_maker_loop(
                         .expect("Unable to send signature to channel");
 
                         total += 1;
-                        if total >= 10 {
+                        if total >= 5 {
                             if let Ok(_) = calc_count_tx.try_send(total) {
                                 total = 0;
                             }
@@ -118,8 +118,9 @@ fn progress_bar_loop(
     loop {
         select! {
             recv(calc_total_rx) -> msg => if let Ok(msg) = msg {
-                calc_bar.set_length(calc_bar.length().unwrap_or(0) + msg);
-                comp_bar.set_length(calc_pair_count(calc_bar.length().unwrap_or(0)));
+                let length = calc_bar.length().unwrap_or(0) + msg;
+                calc_bar.set_length(length);
+                comp_bar.set_length(calc_pair_count(length));
             },
             recv(calc_count_rx) -> msg => if let Ok(msg) = msg {
                 calc_bar.inc(msg);
@@ -153,8 +154,8 @@ fn main_signatures(cli: Cli) {
     }
 
     let (calc_total_tx, calc_total_rx) = crossbeam::channel::bounded(2);
-    let (calc_count_tx, calc_count_rx) = crossbeam::channel::bounded(16000);
-    let (compare_count_tx, compare_count_rx) = crossbeam::channel::bounded(16000);
+    let (calc_count_tx, calc_count_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
+    let (compare_count_tx, compare_count_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
     thread::spawn(move || {
         progress_bar_loop(calc_total_rx, calc_count_rx, compare_count_rx);
