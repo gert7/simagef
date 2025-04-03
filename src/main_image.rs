@@ -1,9 +1,19 @@
-use std::{process::{exit, Command}, thread, io::BufRead, collections::HashMap, sync::{Arc, RwLock, mpsc::channel}};
+use std::{
+    collections::HashMap,
+    io::BufRead,
+    process::{exit, Command},
+    sync::{mpsc::channel, Arc, RwLock},
+    thread,
+};
 
 use crossbeam::channel::Receiver;
 use image::Rgb;
 
-use crate::{cli::Cli, open_image::{open_image, resize_as_needed, IBoft, SingleImage}, shared::{CompareTask, Pairing, make_groups_and_exec}};
+use crate::{
+    cli::Cli,
+    open_image::{open_image, resize_as_needed, IBoft, SingleImage},
+    shared::{make_groups_and_exec, CompareTask, Pairing},
+};
 struct ImageToCompare {
     path: String,
     image: IBoft,
@@ -156,12 +166,9 @@ pub fn main_images(cli: Cli) {
                             let index1 = bundle.image_map.len(); // 3
 
                             for (index2, _) in bundle.image_map.iter().enumerate() {
-                                task_tx.send(
-                                    CompareTask {
-                                        index1,
-                                        index2,
-                                    }
-                                ).expect("Unable to send to task channel!");
+                                task_tx
+                                    .send(CompareTask { index1, index2 })
+                                    .expect("Unable to send to task channel!");
                                 // println!("Image task created for {} {}", index1, index2);
                             }
 
@@ -288,9 +295,7 @@ pub fn main_images(cli: Cli) {
         .read()
         .expect("Unable to read image bundle after all threads have completed.");
 
-    let name_map: Vec<String> = bundle.image_map.iter().map(|s| {
-        s.path.clone()
-    }).collect();
+    let name_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
 
     if !cli.pairs {
         make_groups_and_exec(&name_map, pairings, &executable);

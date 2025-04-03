@@ -21,6 +21,7 @@ use shared::{make_groups_and_exec, CompareTask, Pairing};
 use crate::open_image::open_image;
 
 mod cli;
+#[cfg(feature = "pixel")]
 mod main_image;
 mod open_image;
 mod shared;
