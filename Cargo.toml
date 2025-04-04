@@ -20,7 +20,7 @@ image-compare = { version = "0.3.1", optional = true }
 image-match = { version = "0.2.3", features = ["img"] }
 indicatif = "0.17.11"
 # lsh-rs = { version = "0.4.0", default-features = false }
-lsh-rs = { path = "lsh-rs" }
+lsh-rs = { version = "0.4.0", path = "lsh-rs" }
 num_cpus = "1.16.0"
 
 [features]
