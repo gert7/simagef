@@ -19,13 +19,9 @@ struct ImageToCompare {
     image: IBoft,
 }
 
-impl<'a> SingleImage<'a, IBoft> for ImageToCompare {
-    fn path(&'a self) -> &'a str {
+impl SingleImage<IBoft> for ImageToCompare {
+    fn path(&self) -> &str {
         &self.path
-    }
-
-    fn content(&'a self) -> &'a IBoft {
-        &self.image
     }
 }
 
@@ -86,7 +82,7 @@ pub fn main_images(cli: Cli) {
 
     let mut dash_mode = false;
 
-    if cli.files.len() == 0 {
+    if cli.files.is_empty() {
         eprintln!("No files provided");
         exit(1);
     }
@@ -244,7 +240,7 @@ pub fn main_images(cli: Cli) {
 
     let executable = {
         cli.exec.as_ref().map(|exec| {
-            let mut split = exec.split(" ").into_iter();
+            let mut split = exec.split(" ");
             let command = split.next().expect("Command for exec not provided");
             let rest: Vec<&str> = split.collect();
             (command, rest)
@@ -252,29 +248,24 @@ pub fn main_images(cli: Cli) {
     };
 
     // If we use pairs, we execute for each pair right away.
-    loop {
-        match pair_rx.recv() {
-            Ok(pair) => {
-                if cli.pairs {
-                    let bundle = bundle
-                        .read()
-                        .expect("Unable to read image bundle for pairs");
-                    let filename1 = bundle.image_map[pair.index1].path.clone();
-                    let filename2 = bundle.image_map[pair.index2].path.clone();
-                    println!("{} {}", filename1, filename2);
-                    if let Some((program, args)) = &executable {
-                        Command::new(program)
-                            .args(args)
-                            .arg(filename1)
-                            .arg(filename2)
-                            .output()
-                            .expect("Unable to run executable provided");
-                    }
-                }
-                pairings.push(pair);
+    while let Ok(pair) = pair_rx.recv() {
+        if cli.pairs {
+            let bundle = bundle
+                .read()
+                .expect("Unable to read image bundle for pairs");
+            let filename1 = bundle.image_map[pair.index1].path.clone();
+            let filename2 = bundle.image_map[pair.index2].path.clone();
+            println!("{} {}", filename1, filename2);
+            if let Some((program, args)) = &executable {
+                Command::new(program)
+                    .args(args)
+                    .arg(filename1)
+                    .arg(filename2)
+                    .output()
+                    .expect("Unable to run executable provided");
             }
-            Err(_) => break,
         }
+        pairings.push(pair);
     }
 
     for thread in image_maker_threads {

@@ -1,0 +1,39 @@
+[package]
+name = "lsh-rs"
+version = "0.4.0"
+authors = ["ritchie46 <ritchie46@gmail.com>"]
+edition = "2018"
+license = "MIT"
+description = "LSH: Approximate Nearest Neighbor Search with Locality Sensitive Hashing."
+repository = "https://github.com/ritchie46/lsh-rs"
+readme = "../README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+workspace = []
+# also add blas in ndarray. See Cargo.toml of bench for that.
+blas = ["blas-src", "ndarray/blas"]
+
+[dependencies]
+ndarray = {version = "0.13", features=["serde", "rayon"]}
+blas-src = { version = "0.6", default-features = false, optional = true}
+rand = {version = "^0.7", features = ["small_rng"]}
+rand_distr = "^0.2"
+fnv = "^1.0.6"
+ndarray-rand = "^0.11.0"
+bincode = "^1.2.1"
+serde = { version = "^1.0.104", features = ["derive"] }
+statrs = "^0.12.0"
+rayon = "^1.3.0"
+thiserror = "1.0.13"
+anyhow = "^1.0.27"
+itertools = "^0.9.0"
+num = "^0.2.1"
+
+
+[lib]
+name = "lsh_rs"
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true

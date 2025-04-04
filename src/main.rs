@@ -1,3 +1,9 @@
+mod cli;
+#[cfg(feature = "pixel")]
+mod main_image;
+mod open_image;
+mod shared;
+
 use std::{
     io::BufRead,
     process::{exit, Command},
@@ -13,32 +19,14 @@ use crossbeam::{
 };
 use image_match::{cosine_similarity, image::get_image_signature};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-#[cfg(feature = "pixel")]
-use main_image::main_images;
-use open_image::SingleImage;
 use shared::{make_groups_and_exec, CompareTask, Pairing};
 
 use crate::open_image::open_image;
 
-mod cli;
-#[cfg(feature = "pixel")]
-mod main_image;
-mod open_image;
-mod shared;
 
 struct SignatureToCompare {
     path: String,
     signature: Vec<i8>,
-}
-
-impl<'a> SingleImage<'a, Vec<i8>> for SignatureToCompare {
-    fn path(&'a self) -> &'a str {
-        &self.path
-    }
-
-    fn content(&self) -> &Vec<i8> {
-        &self.signature
-    }
 }
 
 fn signature_maker_loop(
@@ -47,32 +35,23 @@ fn signature_maker_loop(
     calc_count_tx: Sender<u64>,
 ) {
     let mut total = 0;
-    loop {
-        match filename_rx.recv() {
-            Ok(filename) => {
-                let image = open_image(&filename);
-                match image {
-                    Ok(image) => {
-                        let signature = get_image_signature(image);
-                        tx.send(SignatureToCompare {
-                            path: filename,
-                            signature,
-                        })
-                        .expect("Unable to send signature to channel");
+    while let Ok(filename) = filename_rx.recv() {
+        let image = open_image(&filename);
+        match image {
+            Ok(image) => {
+                let signature = get_image_signature(image);
+                tx.send(SignatureToCompare {
+                    path: filename,
+                    signature,
+                })
+                .expect("Unable to send signature to channel");
 
-                        total += 1;
-                        if total >= 5 {
-                            if let Ok(_) = calc_count_tx.try_send(total) {
-                                total = 0;
-                            }
-                        }
-                    }
-                    Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
+                total += 1;
+                if total >= 5 && calc_count_tx.try_send(total).is_ok() {
+                    total = 0;
                 }
             }
-            Err(_) => {
-                break;
-            }
+            Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
         }
     }
     calc_count_tx.send(total).ok();
@@ -94,8 +73,30 @@ impl SignatureBundle {
     }
 }
 
-fn calc_pair_count(n: u64) -> u64 {
-    (n - 1) * n / 2
+fn get_bucket_width(threshold: u8) -> f32 {
+    if threshold < 10 {
+        140.0
+    } else if threshold < 20 {
+        130.0
+    } else if threshold < 30 {
+        120.0
+    } else if threshold < 40 {
+        110.0
+    } else if threshold < 50 {
+        100.0
+    } else if threshold < 60 {
+        100.0
+    } else if threshold < 70 {
+        80.0
+    } else if threshold < 80 {
+        70.0
+    } else if threshold < 90 {
+        60.0
+    } else if threshold < 95 {
+        30.0
+    } else {
+        25.0
+    }
 }
 
 fn progress_bar_loop(
@@ -112,22 +113,17 @@ fn progress_bar_loop(
     calc_bar.set_style(style.clone());
     calc_bar.set_message("Calculating signatures");
 
-    let comp_bar = bars.add(ProgressBar::new(0));
-    comp_bar.set_style(style);
-    comp_bar.set_message("Comparing images      ");
-
     loop {
         select! {
             recv(calc_total_rx) -> msg => if let Ok(msg) = msg {
                 let length = calc_bar.length().unwrap_or(0) + msg;
                 calc_bar.set_length(length);
-                comp_bar.set_length(calc_pair_count(length));
             },
             recv(calc_count_rx) -> msg => if let Ok(msg) = msg {
                 calc_bar.inc(msg);
             },
             recv(compare_count_rx) -> msg => match msg {
-                Ok(msg) => comp_bar.inc(msg),
+                Ok(_) => (),
                 Err(_) => break,
             },
         }
@@ -142,6 +138,7 @@ const CHANNEL_BOUND: usize = 2048;
 fn main_signatures(cli: Cli) {
     let cpu_count = num_cpus::get();
 
+    let threshold_u8: u8 = cli.threshold.unwrap_or(90);
     let threshold: f64 = cli.threshold.unwrap_or(90).into();
     let threshold = threshold * 0.01;
 
@@ -149,7 +146,7 @@ fn main_signatures(cli: Cli) {
 
     let mut dash_mode = false;
 
-    if cli.files.len() == 0 {
+    if cli.files.is_empty() {
         eprintln!("No files provided");
         exit(1);
     }
@@ -158,9 +155,11 @@ fn main_signatures(cli: Cli) {
     let (calc_count_tx, calc_count_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
     let (compare_count_tx, compare_count_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
-    thread::spawn(move || {
-        progress_bar_loop(calc_total_rx, calc_count_rx, compare_count_rx);
-    });
+    if !cli.pairs {
+        thread::spawn(move || {
+            progress_bar_loop(calc_total_rx, calc_count_rx, compare_count_rx);
+        });
+    }
 
     let mut total_filenames = 0;
 
@@ -175,7 +174,7 @@ fn main_signatures(cli: Cli) {
         }
     }
 
-    calc_total_tx.send(total_filenames).ok();
+    calc_total_tx.try_send(total_filenames).ok();
 
     if dash_mode {
         thread::spawn(move || {
@@ -201,7 +200,7 @@ fn main_signatures(cli: Cli) {
                 }
                 buf.clear();
             }
-            calc_total_tx.send(total).ok();
+            calc_total_tx.try_send(total).ok();
         });
     } else {
         drop(filename_tx);
@@ -230,45 +229,52 @@ fn main_signatures(cli: Cli) {
     // Image task channel
     let (task_tx, task_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
+    use lsh_rs::prelude::*;
+    let bucket_width = get_bucket_width(threshold_u8);
+    // println!("Bucket width is {}", bucket_width);
+    let n_projections = 5;
+    let n_hash_tables = 20;
+    let dim = 625;
+    let mut lsh = LshMem::<_, f32>::new(n_projections, n_hash_tables, dim)
+        .seed(4001)
+        .only_index()
+        .l2(bucket_width)
+        .expect("Unable to set up LSH");
+
     let bundle_arc = bundle.clone();
-    let task_master_thread = thread::spawn(move || {
-        // let mut total = 0;
-        loop {
-            match img_rx.recv() {
-                Ok(image) => {
-                    match bundle_arc.write() {
-                        Ok(mut bundle) => {
-                            let index1 = bundle.image_map.len(); // 3
+    thread::spawn(move || {
+        while let Ok(image) = img_rx.recv() {
+            let signature: Vec<_> = image.signature.iter().map(|v| *v as f32).collect();
+            // println!("{:?}, {}", signature, signature.len());
+            let results = lsh
+                .query_bucket_ids(&signature)
+                .expect("Unable to query bucket");
+            let index1 = lsh
+                .store_vec(&signature)
+                .expect("Unable to store signature") as u32;
 
-                            let to_send: Vec<_> = bundle
-                                .image_map
-                                .iter()
-                                .enumerate()
-                                .map(|(index2, _)| CompareTask { index1, index2 })
-                                .collect();
-                            // total += to_send.len() as u64;
-                            bundle.image_map.push(image);
+            let mut guard = bundle_arc.write().expect("Unable to write to bundle");
+            guard.image_map.push(image);
+            drop(guard);
 
-                            drop(bundle);
-
-                            for task in to_send {
-                                task_tx.send(task).expect("Unable to send to task channel!");
-                            }
-
-                            // if total >= 10000 {
-                            //     compare_total_tx.send(CompareTotal::Increment(total)).ok();
-                            //     total = 0;
-                            // }
-                        }
-                        Err(err) => panic!("Unable to lock image map: {}", err),
-                    };
-                }
-                Err(_) => {
-                    break;
-                }
+            for index2 in results {
+                task_tx
+                    .send(CompareTask {
+                        index1: index1 as usize,
+                        index2: index2 as usize,
+                    })
+                    .expect("Unable to send task");
             }
+
+            // println!("{}", index1);
         }
     });
+    // drop(img_rx);
+    // println!("LSH-accelerated Task master thread done");
+
+    // let mut query_point = vec![0.0; dim];
+    // let neighbors = lsh.query(&query_point, 10).unwrap();
+    // println!("{:?}", neighbors);
 
     // Image pairing channel
     let (pair_tx, pair_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
@@ -279,54 +285,43 @@ fn main_signatures(cli: Cli) {
         let task_rx = task_rx.clone();
         let bundle = bundle.clone();
         let pair_tx = pair_tx.clone();
-        let compare_count_tx = compare_count_tx.clone();
         compare_threads.push(thread::spawn(move || {
-            let mut total = 0;
-            loop {
-                match task_rx.recv() {
-                    Ok(task) => match bundle.read() {
-                        Ok(bundle) => {
-                            let image1 = &bundle.image_map[task.index1];
-                            let image2 = &bundle.image_map[task.index2];
+            // let mut total = 0;
+            while let Ok(task) = task_rx.recv() {
+                match bundle.read() {
+                    Ok(bundle) => {
+                        let image1 = &bundle.image_map[task.index1];
+                        let image2 = &bundle.image_map[task.index2];
 
-                            let result = cosine_similarity(&image1.signature, &image2.signature);
+                        let result = cosine_similarity(&image1.signature, &image2.signature);
 
-                            let pairing = Pairing {
-                                index1: task.index1,
-                                index2: task.index2,
-                                score: result,
-                            };
+                        let pairing = Pairing {
+                            index1: task.index1,
+                            index2: task.index2,
+                            score: result,
+                        };
 
-                            if pairing.score > threshold {
-                                pair_tx
-                                    .send(pairing)
-                                    .expect("Unable to send pairing over channel");
-                            }
-                            total += 1;
-                            if total >= 10000 {
-                                if let Ok(_) = compare_count_tx.try_send(total) {
-                                    total = 0;
-                                }
-                            }
+                        if pairing.score > threshold {
+                            pair_tx
+                                .send(pairing)
+                                .expect("Unable to send pairing over channel");
                         }
-                        Err(e) => panic!("{}", e),
-                    },
-                    Err(_) => {
-                        break;
+                        // total += 1;
                     }
+                    Err(e) => panic!("{}", e),
                 }
             }
+            // println!("Compared {} pairs", total);
         }));
     }
 
     drop(pair_tx);
-    drop(compare_count_tx);
 
     let mut pairings = Vec::new();
 
     let executable = {
         cli.exec.as_ref().map(|exec| {
-            let mut split = exec.split(" ").into_iter();
+            let mut split = exec.split(" ");
             let command = split.next().expect("Command for exec not provided");
             let rest: Vec<&str> = split.collect();
             (command, rest)
@@ -334,36 +329,32 @@ fn main_signatures(cli: Cli) {
     };
 
     // If we use pairs, we execute for each pair right away.
-    loop {
-        match pair_rx.recv() {
-            Ok(pair) => {
-                if cli.pairs {
-                    let bundle = bundle
-                        .read()
-                        .expect("Unable to read image bundle for pairs");
-                    let filename1 = bundle.image_map[pair.index1].path.clone();
-                    let filename2 = bundle.image_map[pair.index2].path.clone();
-                    println!("{} {}", filename1, filename2);
-                    if let Some((program, args)) = &executable {
-                        Command::new(program)
-                            .args(args)
-                            .arg(filename1)
-                            .arg(filename2)
-                            .output()
-                            .expect("Unable to run executable provided");
-                    }
-                }
-                pairings.push(pair);
+    while let Ok(pair) = pair_rx.recv() {
+        if cli.pairs {
+            let bundle = bundle
+                .read()
+                .expect("Unable to read image bundle for pairs");
+            let filename1 = bundle.image_map[pair.index1].path.clone();
+            let filename2 = bundle.image_map[pair.index2].path.clone();
+            println!("{} {}", filename1, filename2);
+            if let Some((program, args)) = &executable {
+                Command::new(program)
+                    .args(args)
+                    .arg(filename1)
+                    .arg(filename2)
+                    .output()
+                    .expect("Unable to run executable provided");
             }
-            Err(_) => break,
         }
+        pairings.push(pair);
     }
 
+    // println!("Reaching joins");
+    drop(compare_count_tx);
     for thread in image_maker_threads {
         thread.join().unwrap();
     }
-
-    task_master_thread.join().unwrap();
+    // println!("Image maker threads joined");
 
     for thread in compare_threads {
         thread.join().unwrap();
@@ -385,7 +376,7 @@ fn main_signatures(cli: Cli) {
 fn main() {
     let cli = Cli::parse();
     if cli.pixels {
-        main_images(cli);
+        main_image::main_images(cli);
     } else {
         main_signatures(cli);
     }

@@ -1,7 +1,7 @@
 [package]
 name = "simagef"
 description = "CLI tool for finding similar images"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/gert7/simagef"
@@ -19,6 +19,8 @@ image = "0.24.7"
 image-compare = { version = "0.3.1", optional = true }
 image-match = { version = "0.2.3", features = ["img"] }
 indicatif = "0.17.11"
+# lsh-rs = { version = "0.4.0", default-features = false }
+lsh-rs = { path = "lsh-rs" }
 num_cpus = "1.16.0"
 
 [features]

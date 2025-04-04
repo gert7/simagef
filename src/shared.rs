@@ -17,7 +17,7 @@ pub struct Pairing {
 }
 
 pub fn make_groups_and_exec(
-    name_map: &Vec<String>,
+    name_map: &[String],
     pairings: Vec<Pairing>,
     executable: &Option<(&str, Vec<&str>)>,
 ) {
@@ -38,7 +38,7 @@ pub fn make_groups_and_exec(
     }
 }
 
-pub fn make_groups<'a>(pairs: Vec<Pairing>) -> Vec<Vec<usize>> {
+pub fn make_groups(pairs: Vec<Pairing>) -> Vec<Vec<usize>> {
     let mut graph: HashMap<usize, Vec<usize>> = HashMap::new();
 
     // Build the graph
@@ -46,17 +46,17 @@ pub fn make_groups<'a>(pairs: Vec<Pairing>) -> Vec<Vec<usize>> {
         // let (node1, node2) = *pair;
         let node1 = pair.index1;
         let node2 = pair.index2;
-        graph.entry(node1).or_insert(vec![]).push(node2);
-        graph.entry(node2).or_insert(vec![]).push(node1);
+        graph.entry(node1).or_default().push(node2);
+        graph.entry(node2).or_default().push(node1);
     }
 
     let mut visited: HashSet<usize> = HashSet::new();
     let mut groups: Vec<Vec<usize>> = Vec::new();
 
     // Perform DFS to find connected components
-    fn dfs<'a>(
+    fn dfs(
         node: usize,
-        graph: &'a HashMap<usize, Vec<usize>>,
+        graph: &HashMap<usize, Vec<usize>>,
         visited: &mut HashSet<usize>,
         mut group: Vec<usize>,
     ) -> Vec<usize> {
