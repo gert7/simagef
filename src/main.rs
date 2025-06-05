@@ -229,7 +229,7 @@ fn main_signatures(cli: Cli) {
     // Image task channel
     let (task_tx, task_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
-    use lsh_rs::prelude::*;
+    use lsh_rs2::prelude::*;
     let bucket_width = get_bucket_width(threshold_u8);
     // println!("Bucket width is {}", bucket_width);
     let n_projections = 5;
