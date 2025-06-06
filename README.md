@@ -9,9 +9,9 @@ It uses the [image-match](https://crates.io/crates/image-match) crate to generat
 
 ## Performance
 
-Comparing 10,198 small to medium sized images, simagef takes 40 seconds while findimagedupes takes 1 minute 44 seconds.
+Comparing 16,664 small to medium sized images, simagef takes 1 minute 31 seconds.
 
-![](https://github.com/user-attachments/assets/57bf0ac7-d71a-42aa-9d49-64499854b74f)
+![Screenshot_20250606_185139](https://github.com/user-attachments/assets/302f67df-9479-458f-a6c5-481e40f39b6b)
 
 ## Installation
 
