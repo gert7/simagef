@@ -1,7 +1,7 @@
 [package]
 name = "simagef"
 description = "CLI tool for finding similar images"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/gert7/simagef"
@@ -13,15 +13,16 @@ keywords = ["image", "similarity", "finding", "comparison", "similar"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.4.8", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive"] }
 crossbeam = "0.8.2"
-image = "0.24.7"
-image-compare = { version = "0.3.1", optional = true }
-image-match = { version = "0.2.3", features = ["img"] }
-indicatif = "0.17.11"
+image = { version = "0.25.9", features = ["avif-native"] }
+image-compare = { version = "0.5.0", optional = true }
+# image-match = { version = "0.2.3", features = ["img"] }
+image-match = { path = "image-match-rs", features = ["img"] }
+indicatif = "0.18.3"
 lsh-rs2 = { version = "0.4.1", default-features = false }
 # lsh-rs = { path = "lsh-rs" }
-num_cpus = "1.16.0"
+num_cpus = "1.17.0"
 
 [features]
 pixel = ["image-compare"]

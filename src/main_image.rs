@@ -8,6 +8,7 @@ use std::{
 
 use crossbeam::channel::Receiver;
 use image::Rgb;
+use image_compare::BlendInput;
 
 use crate::{
     cli::Cli,
@@ -199,6 +200,7 @@ pub fn main_images(cli: Cli) {
                         let image1 = &bundle.image_map[task.index1];
                         let image2 = &bundle.image_map[task.index2];
                         // println!("Doing task {} {}", image1.path, image2.path);
+                        BlendInput::RGBA(&image1.image);
 
                         let result = image_compare::rgba_blended_hybrid_compare(
                             (&image1.image).into(),

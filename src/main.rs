@@ -36,8 +36,7 @@ fn signature_maker_loop(
 ) {
     let mut total = 0;
     while let Ok(filename) = filename_rx.recv() {
-        let image = open_image(&filename);
-        match image {
+        match open_image(&filename) {
             Ok(image) => {
                 let signature = get_image_signature(image);
                 tx.send(SignatureToCompare {
