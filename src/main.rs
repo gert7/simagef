@@ -5,9 +5,9 @@ mod open_image;
 mod shared;
 
 use std::{
+    collections::{HashMap, HashSet},
     io::BufRead,
     process::{exit, Command},
-    sync::{Arc, RwLock},
     thread,
 };
 
@@ -19,34 +19,118 @@ use crossbeam::{
 };
 use image_match::{cosine_similarity, image::get_image_signature};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use shared::{make_groups_and_exec, CompareTask, Pairing};
 
 use crate::open_image::open_image;
-
 
 struct SignatureToCompare {
     path: String,
     signature: Vec<i8>,
 }
 
+struct CompareTask {
+    pub index1: (usize, &'static SignatureToCompare),
+    pub index2: (usize, &'static SignatureToCompare),
+}
+
+struct Pairing {
+    pub index1: (usize, &'static SignatureToCompare),
+    pub index2: (usize, &'static SignatureToCompare),
+    pub score: f64,
+}
+
+fn make_groups<P>(pairs: P) -> Vec<Vec<usize>>
+where
+    P: IntoIterator<Item = Pairing>,
+{
+    let mut graph: HashMap<usize, Vec<usize>> = HashMap::new();
+
+    // Build the graph
+    for pair in pairs.into_iter() {
+        // let (node1, node2) = *pair;
+        let node1 = pair.index1.0;
+        let node2 = pair.index2.0;
+        graph.entry(node1).or_default().push(node2);
+        graph.entry(node2).or_default().push(node1);
+    }
+
+    let mut visited: HashSet<usize> = HashSet::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+
+    // Perform DFS to find connected components
+    fn dfs(
+        node: usize,
+        graph: &HashMap<usize, Vec<usize>>,
+        visited: &mut HashSet<usize>,
+        mut group: Vec<usize>,
+    ) -> Vec<usize> {
+        visited.insert(node);
+        group.push(node);
+        if let Some(neighbors) = graph.get(&node) {
+            for neighbor in neighbors.iter() {
+                if !visited.contains(neighbor) {
+                    group = dfs(*neighbor, graph, visited, group);
+                }
+            }
+        }
+        group
+    }
+
+    for node in graph.keys() {
+        if !visited.contains(node) {
+            let mut group: Vec<usize> = Vec::new();
+            group = dfs(*node, &graph, &mut visited, group);
+            groups.push(group);
+        }
+    }
+
+    groups
+}
+
+fn make_groups_and_exec<P>(
+    name_map: &[String],
+    pairings: P,
+    executable: &Option<(&str, Vec<&str>)>,
+) where
+    P: IntoIterator<Item = Pairing>,
+{
+    let groups = make_groups(pairings);
+    for group in groups {
+        let name_group: Vec<String> = group
+            .iter()
+            .map(|index| name_map[*index].clone())
+            .collect();
+        let line = name_group.join(" ");
+        println!("{}", line);
+        if let Some((program, args)) = &executable {
+            Command::new(program)
+                .args(args)
+                .args(name_group)
+                .output()
+                .expect("Unable to run program provided");
+        }
+    }
+}
+
 fn signature_maker_loop(
     filename_rx: Receiver<String>,
-    tx: Sender<SignatureToCompare>,
+    tx: Sender<&'static SignatureToCompare>,
     calc_count_tx: Sender<u64>,
 ) {
-    let mut total = 0;
+    let mut total = 0; // for progress bar
     while let Ok(filename) = filename_rx.recv() {
         match open_image(&filename) {
             Ok(image) => {
                 let signature = get_image_signature(image);
-                tx.send(SignatureToCompare {
+                let stc = SignatureToCompare {
                     path: filename,
                     signature,
-                })
-                .expect("Unable to send signature to channel");
+                };
+                let stc = Box::from(stc);
+                let stc = Box::leak(stc);
+                tx.send(stc).expect("Unable to send signature to channel");
 
                 total += 1;
-                if total >= 5 && calc_count_tx.try_send(total).is_ok() {
+                if total >= 10 && calc_count_tx.try_send(total).is_ok() {
                     total = 0;
                 }
             }
@@ -54,22 +138,6 @@ fn signature_maker_loop(
         }
     }
     calc_count_tx.send(total).ok();
-}
-
-/// A vector of image paths and their signatures. Also contains a HashMap of
-/// paths to indices in that vector to quickly check for duplicates.
-struct SignatureBundle {
-    image_map: Vec<SignatureToCompare>,
-    // name_map: HashMap<String, usize>,
-}
-
-impl SignatureBundle {
-    fn new() -> SignatureBundle {
-        SignatureBundle {
-            image_map: Vec::new(),
-            // name_map: HashMap::new(),
-        }
-    }
 }
 
 fn get_bucket_width(threshold: u8) -> f32 {
@@ -206,9 +274,6 @@ fn main_signatures(cli: Cli) {
         drop(calc_total_tx);
     }
 
-    let bundle = SignatureBundle::new();
-    let bundle = Arc::new(RwLock::new(bundle));
-
     let (img_tx, img_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
     let mut image_maker_threads = Vec::new();
@@ -240,33 +305,43 @@ fn main_signatures(cli: Cli) {
         .l2(bucket_width)
         .expect("Unable to set up LSH");
 
-    let bundle_arc = bundle.clone();
+    let (ret_tx, ret_rx) = crossbeam::channel::bounded(1);
+
     thread::spawn(move || {
+        let mut images: Vec<(usize, &'static SignatureToCompare)> = Vec::new();
+
         while let Ok(image) = img_rx.recv() {
             let signature: Vec<_> = image.signature.iter().map(|v| *v as f32).collect();
             // println!("{:?}, {}", signature, signature.len());
             let results = lsh
                 .query_bucket_ids(&signature)
                 .expect("Unable to query bucket");
-            let index1 = lsh
+            let index1: usize = lsh
                 .store_vec(&signature)
-                .expect("Unable to store signature") as u32;
+                .expect("Unable to store signature")
+                .try_into()
+                .unwrap();
+            let ipair = (index1, image);
+            images.push(ipair);
 
-            let mut guard = bundle_arc.write().expect("Unable to write to bundle");
-            guard.image_map.push(image);
-            drop(guard);
+            // let mut guard = bundle_arc.write().expect("Unable to write to bundle");
+            // guard.image_map.push(image);
+            // drop(guard);
 
             for index2 in results {
+                let index2: usize = index2.try_into().expect("Unable to convert u32 to usize");
                 task_tx
                     .send(CompareTask {
-                        index1: index1 as usize,
-                        index2: index2 as usize,
+                        index1: ipair,
+                        index2: images[index2],
                     })
                     .expect("Unable to send task");
             }
 
             // println!("{}", index1);
         }
+
+        ret_tx.send(images).expect("Unable to send image list back");
     });
     // drop(img_rx);
     // println!("LSH-accelerated Task master thread done");
@@ -282,33 +357,26 @@ fn main_signatures(cli: Cli) {
 
     for _ in 0..cpu_count {
         let task_rx = task_rx.clone();
-        let bundle = bundle.clone();
         let pair_tx = pair_tx.clone();
         compare_threads.push(thread::spawn(move || {
             // let mut total = 0;
             while let Ok(task) = task_rx.recv() {
-                match bundle.read() {
-                    Ok(bundle) => {
-                        let image1 = &bundle.image_map[task.index1];
-                        let image2 = &bundle.image_map[task.index2];
+                let (_, image1) = task.index1;
+                let (_, image2) = task.index2;
+                let result = cosine_similarity(&image1.signature, &image2.signature);
 
-                        let result = cosine_similarity(&image1.signature, &image2.signature);
+                let pairing = Pairing {
+                    index1: task.index1,
+                    index2: task.index2,
+                    score: result,
+                };
 
-                        let pairing = Pairing {
-                            index1: task.index1,
-                            index2: task.index2,
-                            score: result,
-                        };
-
-                        if pairing.score > threshold {
-                            pair_tx
-                                .send(pairing)
-                                .expect("Unable to send pairing over channel");
-                        }
-                        // total += 1;
-                    }
-                    Err(e) => panic!("{}", e),
+                if pairing.score > threshold {
+                    pair_tx
+                        .send(pairing)
+                        .expect("Unable to send pairing over channel");
                 }
+                // total += 1;
             }
             // println!("Compared {} pairs", total);
         }));
@@ -327,14 +395,13 @@ fn main_signatures(cli: Cli) {
         })
     };
 
-    // If we use pairs, we execute for each pair right away.
     while let Ok(pair) = pair_rx.recv() {
+        // If we use pairs, we execute for each pair right away.
         if cli.pairs {
-            let bundle = bundle
-                .read()
-                .expect("Unable to read image bundle for pairs");
-            let filename1 = bundle.image_map[pair.index1].path.clone();
-            let filename2 = bundle.image_map[pair.index2].path.clone();
+            let (_, image1) = pair.index1;
+            let (_, image2) = pair.index2;
+            let filename1 = &image1.path;
+            let filename2 = &image2.path;
             println!("{} {}", filename1, filename2);
             if let Some((program, args)) = &executable {
                 Command::new(program)
@@ -360,11 +427,16 @@ fn main_signatures(cli: Cli) {
     }
     // eprintln!("Compare threads done");
 
-    let bundle = bundle
-        .read()
-        .expect("Unable to read image bundle after all threads have completed.");
+    // let bundle = bundle
+    //     .read()
+    //     .expect("Unable to read image bundle after all threads have completed.");
 
-    let image_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
+    // let image_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
+
+    let images = ret_rx.recv().unwrap();
+    drop(ret_rx);
+
+    let image_map: Vec<String> = images.iter().map(|i| i.1.path.clone()).collect();
 
     if !cli.pairs {
         make_groups_and_exec(&image_map, pairings, &executable);
