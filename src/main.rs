@@ -14,7 +14,7 @@ use std::{
 use clap::Parser;
 use cli::Cli;
 use crossbeam::{
-    channel::{Receiver, Sender},
+    channel::{Receiver, Sender, never},
     select,
 };
 use image_match::{cosine_similarity, image::get_image_signature};
@@ -169,7 +169,6 @@ fn get_bucket_width(threshold: u8) -> f32 {
 fn progress_bar_loop(
     calc_total_rx: Receiver<u64>,
     calc_count_rx: Receiver<u64>,
-    compare_count_rx: Receiver<u64>,
 ) {
     let bars = MultiProgress::new();
     let style = ProgressStyle::with_template("{msg} [{bar:40.cyan/blue}] {pos:>7}/{len:7}")
@@ -180,17 +179,19 @@ fn progress_bar_loop(
     calc_bar.set_style(style.clone());
     calc_bar.set_message("Calculating signatures");
 
+    let mut calc_total_rx = Some(calc_total_rx);
+
     loop {
         select! {
-            recv(calc_total_rx) -> msg => if let Ok(msg) = msg {
-                let length = calc_bar.length().unwrap_or(0) + msg;
-                calc_bar.set_length(length);
+            recv(calc_total_rx.as_ref().unwrap_or(&never())) -> msg => match msg {
+                Ok(msg) => {
+                    let length = calc_bar.length().unwrap_or(0) + msg;
+                    calc_bar.set_length(length);
+                },
+                Err(_) => calc_total_rx = None,
             },
-            recv(calc_count_rx) -> msg => if let Ok(msg) = msg {
-                calc_bar.inc(msg);
-            },
-            recv(compare_count_rx) -> msg => match msg {
-                Ok(_) => (),
+            recv(calc_count_rx) -> msg => match msg {
+                Ok(msg) => calc_bar.inc(msg),
                 Err(_) => break,
             },
         }
@@ -220,11 +221,10 @@ fn main_signatures(cli: Cli) {
 
     let (calc_total_tx, calc_total_rx) = crossbeam::channel::bounded(2);
     let (calc_count_tx, calc_count_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
-    let (compare_count_tx, compare_count_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
     if !cli.pairs {
         thread::spawn(move || {
-            progress_bar_loop(calc_total_rx, calc_count_rx, compare_count_rx);
+            progress_bar_loop(calc_total_rx, calc_count_rx);
         });
     }
 
@@ -415,23 +415,13 @@ fn main_signatures(cli: Cli) {
         pairings.push(pair);
     }
 
-    // println!("Reaching joins");
-    drop(compare_count_tx);
     for thread in image_maker_threads {
         thread.join().unwrap();
     }
-    // println!("Image maker threads joined");
 
     for thread in compare_threads {
         thread.join().unwrap();
     }
-    // eprintln!("Compare threads done");
-
-    // let bundle = bundle
-    //     .read()
-    //     .expect("Unable to read image bundle after all threads have completed.");
-
-    // let image_map: Vec<String> = bundle.image_map.iter().map(|s| s.path.clone()).collect();
 
     let images = ret_rx.recv().unwrap();
     drop(ret_rx);
