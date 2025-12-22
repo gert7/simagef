@@ -14,7 +14,7 @@ use std::{
 use clap::Parser;
 use cli::Cli;
 use crossbeam::{
-    channel::{Receiver, Sender, never},
+    channel::{never, Receiver, Sender},
     select,
 };
 use image_match::{cosine_similarity, image::get_image_signature};
@@ -86,19 +86,13 @@ where
     groups
 }
 
-fn make_groups_and_exec<P>(
-    name_map: &[String],
-    pairings: P,
-    executable: &Option<(&str, Vec<&str>)>,
-) where
+fn make_groups_and_exec<P>(name_map: &[String], pairings: P, executable: &Option<(&str, Vec<&str>)>)
+where
     P: IntoIterator<Item = Pairing>,
 {
     let groups = make_groups(pairings);
     for group in groups {
-        let name_group: Vec<String> = group
-            .iter()
-            .map(|index| name_map[*index].clone())
-            .collect();
+        let name_group: Vec<String> = group.iter().map(|index| name_map[*index].clone()).collect();
         let line = name_group.join(" ");
         println!("{}", line);
         if let Some((program, args)) = &executable {
@@ -109,35 +103,6 @@ fn make_groups_and_exec<P>(
                 .expect("Unable to run program provided");
         }
     }
-}
-
-fn signature_maker_loop(
-    filename_rx: Receiver<String>,
-    tx: Sender<&'static SignatureToCompare>,
-    calc_count_tx: Sender<u64>,
-) {
-    let mut total = 0; // for progress bar
-    while let Ok(filename) = filename_rx.recv() {
-        match open_image(&filename) {
-            Ok(image) => {
-                let signature = get_image_signature(image);
-                let stc = SignatureToCompare {
-                    path: filename,
-                    signature,
-                };
-                let stc = Box::from(stc);
-                let stc = Box::leak(stc);
-                tx.send(stc).expect("Unable to send signature to channel");
-
-                total += 1;
-                if total >= 10 && calc_count_tx.try_send(total).is_ok() {
-                    total = 0;
-                }
-            }
-            Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
-        }
-    }
-    calc_count_tx.send(total).ok();
 }
 
 fn get_bucket_width(threshold: u8) -> f32 {
@@ -166,10 +131,7 @@ fn get_bucket_width(threshold: u8) -> f32 {
     }
 }
 
-fn progress_bar_loop(
-    calc_total_rx: Receiver<u64>,
-    calc_count_rx: Receiver<u64>,
-) {
+fn progress_bar_loop(calc_total_rx: Receiver<u64>, calc_count_rx: Receiver<u64>) {
     let bars = MultiProgress::new();
     let style = ProgressStyle::with_template("{msg} [{bar:40.cyan/blue}] {pos:>7}/{len:7}")
         .expect("Unable to style the progress bar")
@@ -203,9 +165,65 @@ fn progress_bar_loop(
 const FILENAME_CHANNEL_BOUND: usize = 65535;
 const CHANNEL_BOUND: usize = 2048;
 
-fn main_signatures(cli: Cli) {
+fn read_filenames(filename_tx: Sender<String>, dash_mode: bool, calc_total_tx: Sender<u64>) {
+    if dash_mode {
+        thread::spawn(move || {
+            let mut total = 0;
+            let mut stdin_lock = std::io::stdin().lock();
+            let mut buf = String::new();
+            loop {
+                match stdin_lock.read_line(&mut buf) {
+                    Ok(len) => {
+                        if len == 0 {
+                            break;
+                        }
+                        let slice = buf[0..(len - 1)].to_owned();
+                        filename_tx
+                            .send(slice)
+                            .expect("Unable to send filename to channel");
+                        total += 1;
+                    }
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        break;
+                    }
+                }
+                buf.clear();
+            }
+            calc_total_tx.try_send(total).ok();
+        });
+    }
+}
+
+fn spawn_cosine_threads(threshold: f64, task_rx: Receiver<CompareTask>, pair_tx: Sender<Pairing>) {
     let cpu_count = num_cpus::get();
 
+    for _ in 0..cpu_count {
+        let task_rx = task_rx.clone();
+        let pair_tx = pair_tx.clone();
+        thread::spawn(move || {
+            while let Ok(task) = task_rx.recv() {
+                let (_, image1) = task.index1;
+                let (_, image2) = task.index2;
+                let result = cosine_similarity(&image1.signature, &image2.signature);
+
+                let pairing = Pairing {
+                    index1: task.index1,
+                    index2: task.index2,
+                    score: result,
+                };
+
+                if pairing.score > threshold {
+                    pair_tx
+                        .send(pairing)
+                        .expect("Unable to send pairing over channel");
+                }
+            }
+        });
+    }
+}
+
+fn main_signatures(cli: Cli) {
     let threshold_u8: u8 = cli.threshold.unwrap_or(90);
     let threshold: f64 = cli.threshold.unwrap_or(90).into();
     let threshold = threshold * 0.01;
@@ -243,76 +261,61 @@ fn main_signatures(cli: Cli) {
 
     calc_total_tx.try_send(total_filenames).ok();
 
-    if dash_mode {
-        thread::spawn(move || {
-            let mut total = 0;
-            let mut stdin_lock = std::io::stdin().lock();
-            let mut buf = String::new();
-            loop {
-                match stdin_lock.read_line(&mut buf) {
-                    Ok(len) => {
-                        if len == 0 {
-                            break;
-                        }
-                        let slice = buf[0..(len - 1)].to_owned();
-                        filename_tx
-                            .send(slice)
-                            .expect("Unable to send filename to channel");
-                        total += 1;
-                    }
-                    Err(err) => {
-                        eprintln!("{}", err);
-                        break;
-                    }
+    read_filenames(filename_tx, dash_mode, calc_total_tx);
+
+    let (img_tx, img_rx) =
+        crossbeam::channel::bounded::<&'static SignatureToCompare>(CHANNEL_BOUND);
+
+
+    thread::spawn(move || {
+        use rayon::prelude::*;
+
+        filename_rx
+            .into_iter()
+            .par_bridge()
+            .for_each(|filename| match open_image(&filename) {
+                Ok(image) => {
+                    let signature = get_image_signature(image);
+                    let stc = SignatureToCompare {
+                        path: filename,
+                        signature,
+                    };
+                    let stc = Box::from(stc);
+                    let stc = Box::leak(stc);
+                    img_tx
+                        .send(stc)
+                        .expect("Unable to send signature to channel");
+
+                    calc_count_tx.try_send(1).ok();
                 }
-                buf.clear();
-            }
-            calc_total_tx.try_send(total).ok();
-        });
-    } else {
-        drop(filename_tx);
-        drop(calc_total_tx);
-    }
-
-    let (img_tx, img_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
-
-    let mut image_maker_threads = Vec::new();
-
-    for _ in 0..cpu_count {
-        let filename_rx = filename_rx.clone();
-        let img_tx = img_tx.clone();
-        let calc_count_tx = calc_count_tx.clone();
-        image_maker_threads.push(thread::spawn(move || {
-            signature_maker_loop(filename_rx, img_tx, calc_count_tx);
-        }));
-    }
-
-    drop(img_tx);
-    drop(calc_count_tx);
+                Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
+            });
+    });
 
     // Image task channel
     let (task_tx, task_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
-    use lsh_rs2::prelude::*;
-    let bucket_width = get_bucket_width(threshold_u8);
-    // println!("Bucket width is {}", bucket_width);
-    let n_projections = 5;
-    let n_hash_tables = 20;
-    let dim = 625;
-    let mut lsh = LshMem::<_, f32>::new(n_projections, n_hash_tables, dim)
-        .seed(4001)
-        .only_index()
-        .l2(bucket_width)
-        .expect("Unable to set up LSH");
-
+    // Image list return channel
     let (ret_tx, ret_rx) = crossbeam::channel::bounded(1);
 
     thread::spawn(move || {
+        use lsh_rs2::prelude::*;
+
+        let bucket_width = get_bucket_width(threshold_u8);
+        // println!("Bucket width is {}", bucket_width);
+        let n_projections = 5;
+        let n_hash_tables = 20;
+        let dim = 625;
+        let mut lsh = LshMem::<_, f32>::new(n_projections, n_hash_tables, dim)
+            .seed(4001)
+            .only_index()
+            .l2(bucket_width)
+            .expect("Unable to set up LSH");
+
         let mut images: Vec<(usize, &'static SignatureToCompare)> = Vec::new();
 
         while let Ok(image) = img_rx.recv() {
             let signature: Vec<_> = image.signature.iter().map(|v| *v as f32).collect();
-            // println!("{:?}, {}", signature, signature.len());
             let results = lsh
                 .query_bucket_ids(&signature)
                 .expect("Unable to query bucket");
@@ -321,12 +324,9 @@ fn main_signatures(cli: Cli) {
                 .expect("Unable to store signature")
                 .try_into()
                 .unwrap();
+
             let ipair = (index1, image);
             images.push(ipair);
-
-            // let mut guard = bundle_arc.write().expect("Unable to write to bundle");
-            // guard.image_map.push(image);
-            // drop(guard);
 
             for index2 in results {
                 let index2: usize = index2.try_into().expect("Unable to convert u32 to usize");
@@ -337,52 +337,15 @@ fn main_signatures(cli: Cli) {
                     })
                     .expect("Unable to send task");
             }
-
-            // println!("{}", index1);
         }
 
         ret_tx.send(images).expect("Unable to send image list back");
     });
-    // drop(img_rx);
-    // println!("LSH-accelerated Task master thread done");
-
-    // let mut query_point = vec![0.0; dim];
-    // let neighbors = lsh.query(&query_point, 10).unwrap();
-    // println!("{:?}", neighbors);
 
     // Image pairing channel
     let (pair_tx, pair_rx) = crossbeam::channel::bounded(CHANNEL_BOUND);
 
-    let mut compare_threads = Vec::new();
-
-    for _ in 0..cpu_count {
-        let task_rx = task_rx.clone();
-        let pair_tx = pair_tx.clone();
-        compare_threads.push(thread::spawn(move || {
-            // let mut total = 0;
-            while let Ok(task) = task_rx.recv() {
-                let (_, image1) = task.index1;
-                let (_, image2) = task.index2;
-                let result = cosine_similarity(&image1.signature, &image2.signature);
-
-                let pairing = Pairing {
-                    index1: task.index1,
-                    index2: task.index2,
-                    score: result,
-                };
-
-                if pairing.score > threshold {
-                    pair_tx
-                        .send(pairing)
-                        .expect("Unable to send pairing over channel");
-                }
-                // total += 1;
-            }
-            // println!("Compared {} pairs", total);
-        }));
-    }
-
-    drop(pair_tx);
+    spawn_cosine_threads(threshold, task_rx, pair_tx);
 
     let mut pairings = Vec::new();
 
@@ -415,23 +378,15 @@ fn main_signatures(cli: Cli) {
         pairings.push(pair);
     }
 
-    for thread in image_maker_threads {
-        thread.join().unwrap();
-    }
-
-    for thread in compare_threads {
-        thread.join().unwrap();
-    }
-
     let images = ret_rx.recv().unwrap();
-    drop(ret_rx);
 
-    let image_map: Vec<String> = images.iter().map(|i| i.1.path.clone()).collect();
+    let image_map: Vec<String> = images.iter().map(|(_, s)| s.path.clone()).collect();
 
     if !cli.pairs {
         make_groups_and_exec(&image_map, pairings, &executable);
     }
 }
+
 
 #[cfg(feature = "pixel")]
 fn main() {
