@@ -1,10 +1,18 @@
+/*
+ https://github.com/alt-text-org/image-match-rs
+
+ Authors
+ Hannah Kolbeck    https://github.com/hkolbeck
+ Eli Bradshaw      https://github.com/cincodenada
+                   https://github.com/paulotten
+ */
+
 use std::cmp::{max, min};
 use std::collections::HashMap;
 
 #[allow(unused_imports)] // It's actually used, I promise
 use num::Signed;
 
-#[cfg(feature = "img")]
 pub mod image;
 
 const DEFAULT_CROP: f32 = 0.05;

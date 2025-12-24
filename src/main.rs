@@ -1,26 +1,32 @@
 mod cli;
+mod database;
 #[cfg(feature = "pixel")]
 mod main_image;
 mod open_image;
 mod shared;
 
+use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
     io::BufRead,
-    process::{exit, Command},
-    thread,
+    path::PathBuf,
+    process::{Command, exit},
+    thread::{self, JoinHandle},
 };
 
 use clap::Parser;
 use cli::Cli;
 use crossbeam::{
-    channel::{never, Receiver, Sender},
+    channel::{Receiver, Sender, never},
     select,
 };
-use image_match::{cosine_similarity, image::get_image_signature};
+mod image_match_rs;
+use image_match_rs::{cosine_similarity, image::get_image_signature};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use rusqlite::Connection;
 
-use crate::open_image::open_image;
+use crate::{database::InsertionMessage, open_image::open_image_path};
 
 struct SignatureToCompare {
     path: String,
@@ -195,6 +201,133 @@ fn read_filenames(filename_tx: Sender<String>, dash_mode: bool, calc_total_tx: S
     }
 }
 
+#[derive(Debug)]
+enum SigFetchError {
+    PathConversionError(&'static str),
+}
+
+impl fmt::Display for SigFetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SigFetchError::PathConversionError(error) => {
+                write!(f, "Error converting file path to string: {}", error)
+            }
+        }
+    }
+}
+
+impl Error for SigFetchError {}
+
+fn spawn_insertion_thread(
+    insert_rx: Receiver<InsertionMessage>,
+    db_path: &PathBuf,
+) -> rusqlite::Result<JoinHandle<()>> {
+    let mut conn = Connection::open(db_path)?;
+
+    let t = thread::spawn(move || {
+        let mut messages = vec![];
+
+        while let Ok(msg) = insert_rx.recv() {
+            messages.push(msg);
+
+            if messages.len() >= 100 {
+                if let Err(e) = database::insert_batch(&mut conn, &messages) {
+                    eprintln!("{}", e);
+                }
+                messages.clear();
+            }
+        }
+        if let Err(e) = database::insert_batch(&mut conn, &messages) {
+            eprintln!("{}", e);
+        }
+    });
+
+    Ok(t)
+}
+
+fn fetch_signature(
+    filename: &str,
+    db_conn: &Option<Connection>,
+    insert_tx: &Sender<InsertionMessage>,
+) -> anyhow::Result<Vec<i8>> {
+    let filename = std::fs::canonicalize(filename)?;
+
+    match db_conn {
+        Some(conn) => {
+            let filename_s = filename.to_str().ok_or(SigFetchError::PathConversionError(
+                "Unable to convert file path",
+            ))?;
+            let stat = std::fs::metadata(&filename)?;
+            let signature = database::fetch(conn, filename_s, &stat)?;
+            match signature {
+                Some(signature) => Ok(signature.signature),
+                None => {
+                    let image = open_image_path(&filename)?;
+                    let signature = get_image_signature(image);
+                    insert_tx
+                        .send(InsertionMessage {
+                            filename_s: filename_s.to_string(),
+                            stat,
+                            signature: signature.clone(),
+                        })
+                        .expect("Unable to send InsertionMessage");
+                    Ok(signature)
+                }
+            }
+        }
+        None => {
+            let image = open_image_path(&filename)?;
+            Ok(get_image_signature(image))
+        }
+    }
+}
+
+fn spawn_signature_threads(
+    filename_rx: Receiver<String>,
+    img_tx: Sender<&'static SignatureToCompare>,
+    calc_count_tx: Sender<u64>,
+    db_path: Option<PathBuf>,
+    insert_tx: Sender<InsertionMessage>,
+) {
+    let cpu_count = num_cpus::get();
+
+    for _ in 0..cpu_count {
+        let filename_rx = filename_rx.clone();
+        let img_tx = img_tx.clone();
+        let calc_count_tx = calc_count_tx.clone();
+        let db_path = db_path.clone();
+        let insert_tx = insert_tx.clone();
+        thread::spawn(move || {
+            let db_conn = db_path.as_ref().map(|db_path| {
+                Connection::open(db_path).expect("Unable to open database connection")
+            });
+            let mut total = 0;
+            while let Ok(filename) = filename_rx.recv() {
+                match fetch_signature(&filename, &db_conn, &insert_tx) {
+                    Ok(signature) => {
+                        let stc = SignatureToCompare {
+                            path: filename,
+                            signature,
+                        };
+                        let stc = Box::from(stc);
+                        let stc = Box::leak(stc);
+                        img_tx
+                            .send(stc)
+                            .expect("Unable to send signature to channel");
+
+                        total += 1;
+                        if total >= 5 && calc_count_tx.try_send(total).is_ok() {
+                            total = 0;
+                        }
+                    }
+                    Err(e) => eprintln!("{}: {}", filename, e),
+                }
+            }
+            calc_count_tx.send(total).ok();
+        });
+    }
+}
+
 fn spawn_cosine_threads(threshold: f64, task_rx: Receiver<CompareTask>, pair_tx: Sender<Pairing>) {
     let cpu_count = num_cpus::get();
 
@@ -223,44 +356,26 @@ fn spawn_cosine_threads(threshold: f64, task_rx: Receiver<CompareTask>, pair_tx:
     }
 }
 
-fn signature_maker_loop(
-    filename_rx: Receiver<String>,
-    img_tx: Sender<&'static SignatureToCompare>,
-    calc_count_tx: Sender<u64>,
-) {
-    let cpu_count = num_cpus::get();
-    for _ in 0..cpu_count {
-        let filename_rx = filename_rx.clone();
-        let img_tx = img_tx.clone();
-        let calc_count_tx = calc_count_tx.clone();
-        thread::spawn(move || {
-            let mut total = 0;
-            while let Ok(filename) = filename_rx.recv() {
-                match open_image(&filename) {
-                    Ok(image) => {
-                        let signature = get_image_signature(image);
-                        let stc = SignatureToCompare {
-                            path: filename,
-                            signature,
-                        };
-                        let stc = Box::from(stc);
-                        let stc = Box::leak(stc);
-                        img_tx.send(stc).expect("Unable to send signature to channel");
-
-                        total += 1;
-                        if total >= 5 && calc_count_tx.try_send(total).is_ok() {
-                            total = 0;
-                        }
-                    }
-                    Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
-                }
-            }
-            calc_count_tx.send(total).ok();
-        });
-    }
-}
-
 fn main_signatures(cli: Cli) {
+    let db_path = platform_dirs::AppDirs::new(Some("simagef"), false).map(|v| v.cache_dir);
+
+    let db_path = if !cli.no_database {
+        let db_path = db_path.expect("Unable to figure out database path");
+        let conn = Connection::open(&db_path).expect("Unable to open SQLite database");
+        database::init(&conn).expect("Unable to initialize database");
+        Some(db_path)
+    } else {
+        None
+    };
+
+    let (insert_tx, insert_rx) = crossbeam::channel::bounded(2048);
+
+    let mut insertion_thread = None;
+
+    if let Some(db_path) = &db_path {
+        insertion_thread = Some(spawn_insertion_thread(insert_rx, db_path).expect("Unable to start database insertion thread"));
+    }
+
     let threshold_u8: u8 = cli.threshold.unwrap_or(90);
     let threshold: f64 = cli.threshold.unwrap_or(90).into();
     let threshold = threshold * 0.01;
@@ -304,7 +419,7 @@ fn main_signatures(cli: Cli) {
         crossbeam::channel::bounded::<&'static SignatureToCompare>(CHANNEL_BOUND);
 
     thread::spawn(move || {
-        signature_maker_loop(filename_rx, img_tx, calc_count_tx);
+        spawn_signature_threads(filename_rx, img_tx, calc_count_tx, db_path, insert_tx);
     });
 
     // Image task channel
@@ -393,6 +508,10 @@ fn main_signatures(cli: Cli) {
         pairings.push(pair);
     }
 
+    if let Some(thread) = insertion_thread {
+        thread.join().expect("Database insertion thread error");
+    }
+
     let images = ret_rx.recv().unwrap();
 
     let image_map: Vec<String> = images.iter().map(|(_, s)| s.path.clone()).collect();
@@ -403,16 +522,21 @@ fn main_signatures(cli: Cli) {
 }
 
 #[cfg(feature = "pixel")]
-fn main() {
-    let cli = Cli::parse();
-    if cli.pixels {
-        main_image::main_images(cli);
-    } else {
-        main_signatures(cli);
-    }
+fn main_pixel(cli: Cli) {
+    main_image::main_images(cli);
 }
 
 #[cfg(not(feature = "pixel"))]
+fn main_pixel(_cli: Cli) {
+    eprintln!("--pixels feature not enabled");
+    exit(1);
+}
+
 fn main() {
-    main_signatures(Cli::parse());
+    let cli = Cli::parse();
+    if cli.pixels {
+        main_pixel(cli);
+    } else {
+        main_signatures(cli);
+    }
 }

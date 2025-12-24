@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use image::{ImageBuffer, Rgba, ImageResult};
 
 /** Image buffer of type. */
@@ -9,6 +11,10 @@ pub trait SingleImage<T> {
 }
 
 pub fn open_image(filename: &str) -> ImageResult<IBoft> {
+    Ok(image::open(filename)?.into_rgba8())
+}
+
+pub fn open_image_path(filename: &PathBuf) -> ImageResult<IBoft> {
     Ok(image::open(filename)?.into_rgba8())
 }
 

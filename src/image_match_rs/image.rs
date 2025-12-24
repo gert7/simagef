@@ -1,3 +1,10 @@
+/*
+ Authors
+ Hannah Kolbeck    https://github.com/hkolbeck
+ Eli Bradshaw      https://github.com/cincodenada
+                   https://github.com/paulotten
+ */
+
 use std::cmp::{max, min};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -10,7 +17,7 @@ use num::ToPrimitive;
 
 use ImageReadError::{DecodeError, IoError};
 
-use crate::{compute_from_gray, DEFAULT_CROP, DEFAULT_GRID_SIZE, pixel_gray};
+use crate::image_match_rs::{compute_from_gray, DEFAULT_CROP, DEFAULT_GRID_SIZE, pixel_gray};
 
 /// Produces a 544 signed byte signature for a provided image. The result is designed to be compared
 /// to other vectors computed by a call to this method using [cosine-similarity(a, b)].

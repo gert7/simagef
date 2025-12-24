@@ -16,6 +16,9 @@ pub struct Cli {
     /// If set, will only present the matched images in pairs rather than groups.
     #[arg(short('p'), long, default_value_t = false)]
     pub pairs: bool,
+    /// By default we use a database to store signatures, speeding up subsequent runs.
+    #[arg(short('d'), long, default_value_t = false)]
+    pub no_database: bool,
     /// The width to resize the images to before comparing in pixel mode.
     #[arg(long, default_value_t = 160)]
     pub width: u32,
