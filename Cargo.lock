@@ -1435,7 +1435,6 @@ dependencies = [
  "indicatif",
  "lsh-rs2",
  "num_cpus",
- "rayon",
 ]
 
 [[package]]

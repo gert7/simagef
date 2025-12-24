@@ -23,7 +23,6 @@ indicatif = "0.18.3"
 lsh-rs2 = { version = "0.4.1", default-features = false }
 # lsh-rs = { path = "lsh-rs" }
 num_cpus = "1.17.0"
-rayon = "1.11.0"
 
 [features]
 pixel = ["image-compare"]

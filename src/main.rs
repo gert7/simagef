@@ -223,6 +223,43 @@ fn spawn_cosine_threads(threshold: f64, task_rx: Receiver<CompareTask>, pair_tx:
     }
 }
 
+fn signature_maker_loop(
+    filename_rx: Receiver<String>,
+    img_tx: Sender<&'static SignatureToCompare>,
+    calc_count_tx: Sender<u64>,
+) {
+    let cpu_count = num_cpus::get();
+    for _ in 0..cpu_count {
+        let filename_rx = filename_rx.clone();
+        let img_tx = img_tx.clone();
+        let calc_count_tx = calc_count_tx.clone();
+        thread::spawn(move || {
+            let mut total = 0;
+            while let Ok(filename) = filename_rx.recv() {
+                match open_image(&filename) {
+                    Ok(image) => {
+                        let signature = get_image_signature(image);
+                        let stc = SignatureToCompare {
+                            path: filename,
+                            signature,
+                        };
+                        let stc = Box::from(stc);
+                        let stc = Box::leak(stc);
+                        img_tx.send(stc).expect("Unable to send signature to channel");
+
+                        total += 1;
+                        if total >= 5 && calc_count_tx.try_send(total).is_ok() {
+                            total = 0;
+                        }
+                    }
+                    Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
+                }
+            }
+            calc_count_tx.send(total).ok();
+        });
+    }
+}
+
 fn main_signatures(cli: Cli) {
     let threshold_u8: u8 = cli.threshold.unwrap_or(90);
     let threshold: f64 = cli.threshold.unwrap_or(90).into();
@@ -266,30 +303,8 @@ fn main_signatures(cli: Cli) {
     let (img_tx, img_rx) =
         crossbeam::channel::bounded::<&'static SignatureToCompare>(CHANNEL_BOUND);
 
-
     thread::spawn(move || {
-        use rayon::prelude::*;
-
-        filename_rx
-            .into_iter()
-            .par_bridge()
-            .for_each(|filename| match open_image(&filename) {
-                Ok(image) => {
-                    let signature = get_image_signature(image);
-                    let stc = SignatureToCompare {
-                        path: filename,
-                        signature,
-                    };
-                    let stc = Box::from(stc);
-                    let stc = Box::leak(stc);
-                    img_tx
-                        .send(stc)
-                        .expect("Unable to send signature to channel");
-
-                    calc_count_tx.try_send(1).ok();
-                }
-                Err(e) => eprintln!("Unable to open image {}: {}", filename, e),
-            });
+        signature_maker_loop(filename_rx, img_tx, calc_count_tx);
     });
 
     // Image task channel
@@ -386,7 +401,6 @@ fn main_signatures(cli: Cli) {
         make_groups_and_exec(&image_map, pairings, &executable);
     }
 }
-
 
 #[cfg(feature = "pixel")]
 fn main() {
