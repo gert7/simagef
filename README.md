@@ -29,7 +29,14 @@ Install via cargo on most platforms:
 cargo install simagef
 ```
 
-or with the pixel feature:
+For AVIF support, requiring
+[libdav1d](https://github.com/videolan/dav1d) to be installed on your system:
+
+```
+cargo install simagef --features avif
+```
+
+The less efficient "pixel" mode:
 
 ```
 cargo install simagef --features pixel
@@ -56,7 +63,8 @@ simagef -t 50 a.png b.png c.png
 ```
 
 You can additionally read filenames from `stdin` if `-` appears in the filenames
-list. For example using it with the `fd` command for finding files:
+list. For example using it with the [fd](https://github.com/sharkdp/fd)
+command for finding files:
 
 ```
 fd . ~/my_images | simagef base.png base2.png -
@@ -74,7 +82,9 @@ You can specify an external image viewer for comparing groups of images using
 simagef -e "gwenview -s" ~/Pictures/*
 ```
 
-This will launch the executable with the groups (or pairs) of filenames as arguments. It will launch the executable again for the next group once the previous executable exits.
+This will launch the executable with the groups (or pairs) of filenames as
+arguments. It will launch the executable again for the next group once the
+previous executable exits.
 
 ### Database
 
