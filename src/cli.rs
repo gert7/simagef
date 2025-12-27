@@ -19,6 +19,12 @@ pub struct Cli {
     /// By default we use a database to store signatures, speeding up subsequent runs.
     #[arg(short('d'), long, default_value_t = false)]
     pub no_database: bool,
+    /// The path for the database file. Will be created if it doesn't exist.
+    #[arg(long)]
+    pub database_file: Option<String>,
+    /// Print database file location and exit.
+    #[arg(long)]
+    pub print_database_location: bool,
     /// The width to resize the images to before comparing in pixel mode.
     #[arg(long, default_value_t = 160)]
     pub width: u32,

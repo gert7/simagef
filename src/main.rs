@@ -11,14 +11,14 @@ use std::{
     error::Error,
     io::BufRead,
     path::PathBuf,
-    process::{Command, exit},
+    process::{exit, Command},
     thread::{self, JoinHandle},
 };
 
 use clap::Parser;
 use cli::Cli;
 use crossbeam::{
-    channel::{Receiver, Sender, never},
+    channel::{never, Receiver, Sender},
     select,
 };
 mod image_match_rs;
@@ -357,7 +357,15 @@ fn spawn_cosine_threads(threshold: f64, task_rx: Receiver<CompareTask>, pair_tx:
 }
 
 fn main_signatures(cli: Cli) {
-    let db_path = platform_dirs::AppDirs::new(Some("simagef"), false).map(|v| v.cache_dir);
+    let db_path = cli
+        .database_file
+        .map(|path| PathBuf::from(path))
+        .or_else(|| platform_dirs::AppDirs::new(Some("simagef"), false).map(|v| v.cache_dir));
+
+    if cli.print_database_location {
+        println!("{}", db_path.expect("Unable to figure out database path").to_str().expect("Unable to format database path"));
+        exit(0);
+    }
 
     let db_path = if !cli.no_database {
         let db_path = db_path.expect("Unable to figure out database path");
@@ -373,7 +381,10 @@ fn main_signatures(cli: Cli) {
     let mut insertion_thread = None;
 
     if let Some(db_path) = &db_path {
-        insertion_thread = Some(spawn_insertion_thread(insert_rx, db_path).expect("Unable to start database insertion thread"));
+        insertion_thread = Some(
+            spawn_insertion_thread(insert_rx, db_path)
+                .expect("Unable to start database insertion thread"),
+        );
     }
 
     let threshold_u8: u8 = cli.threshold.unwrap_or(90);
@@ -534,6 +545,23 @@ fn main_pixel(_cli: Cli) {
 
 fn main() {
     let cli = Cli::parse();
+
+    if cli.database_file.is_some() && cli.no_database {
+        eprintln!("Database file specified, but database is disabled.");
+        eprintln!("These two options cannot be used at the same time.");
+        exit(1);
+    }
+
+    if cli.database_file.is_some() && cli.pixels {
+        eprintln!("Database file cannot be specified in pixel mode.");
+        exit(1);
+    }
+
+    if cli.print_database_location && (cli.no_database || cli.database_file.is_some()) {
+        eprintln!("Requesting database file location with incompatible options.");
+        exit(1);
+    }
+
     if cli.pixels {
         main_pixel(cli);
     } else {
