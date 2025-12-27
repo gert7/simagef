@@ -36,6 +36,9 @@ avif = ["image/avif-native"]
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 
+[package.metadata.aur]
+depends = ["dav1d"]
+
 # [profile.release]
 # opt-level = 3
 # debug = false
