@@ -14,6 +14,7 @@ use crate::{
     cli::Cli,
     open_image::{open_image, resize_as_needed, IBoft, SingleImage},
     shared::{make_groups_and_exec, CompareTask, Pairing},
+    formatting::print_fmt,
 };
 struct ImageToCompare {
     path: String,
@@ -257,7 +258,7 @@ pub fn main_images(cli: Cli) {
                 .expect("Unable to read image bundle for pairs");
             let filename1 = bundle.image_map[pair.index1].path.clone();
             let filename2 = bundle.image_map[pair.index2].path.clone();
-            println!("{} {}", filename1, filename2);
+            print_fmt(&vec![&filename1, &filename2], cli.format);
             if let Some((program, args)) = &executable {
                 Command::new(program)
                     .args(args)

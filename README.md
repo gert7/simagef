@@ -86,6 +86,20 @@ This will launch the executable with the groups (or pairs) of filenames as
 arguments. It will launch the executable again for the next group once the
 previous executable exits.
 
+### Formatting
+
+Use the `--format` option to specify how output to stdout should be formatted:
+
+- `--format regular` separates file paths with spaces and groups with newlines.
+It makes no distinction between path separation and spaces in paths.
+
+- `--format quote` wraps filenames in quote marks, separates file paths with
+spaces, and escapes spaces in paths with a literal backslash. It separates
+groups with newlines.
+
+- `--format null` provides file paths in full, separates file paths with the
+NUL character and separates groups with two subsequent NUL characters.
+
 ### Database
 
 From version 1.3.0, the database is enabled by default and greatly speeds up

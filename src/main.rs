@@ -1,5 +1,6 @@
 mod cli;
 mod database;
+mod formatting;
 #[cfg(feature = "pixel")]
 mod main_image;
 mod open_image;
@@ -26,7 +27,9 @@ use image_match_rs::{cosine_similarity, image::get_image_signature};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
 
-use crate::{database::InsertionMessage, open_image::open_image_path};
+use crate::{
+    cli::Fmt, database::InsertionMessage, formatting::print_fmt, open_image::open_image_path,
+};
 
 struct SignatureToCompare {
     path: String,
@@ -92,15 +95,21 @@ where
     groups
 }
 
-fn make_groups_and_exec<P>(name_map: &[String], pairings: P, executable: &Option<(&str, Vec<&str>)>)
-where
+fn make_groups_and_exec<P>(
+    name_map: &[String],
+    pairings: P,
+    executable: &Option<(&str, Vec<&str>)>,
+    fmt: Fmt,
+) where
     P: IntoIterator<Item = Pairing>,
 {
     let groups = make_groups(pairings);
     for group in groups {
-        let name_group: Vec<String> = group.iter().map(|index| name_map[*index].clone()).collect();
-        let line = name_group.join(" ");
-        println!("{}", line);
+        let name_group: Vec<&str> = group
+            .iter()
+            .map(|index| name_map[*index].as_ref())
+            .collect();
+        print_fmt(&name_group, fmt);
         if let Some((program, args)) = &executable {
             Command::new(program)
                 .args(args)
@@ -137,6 +146,11 @@ fn get_bucket_width(threshold: u8) -> f32 {
     }
 }
 
+#[cfg(feature = "instrumentation")]
+fn instrumentation(done: u64, length: u64) {
+    eprintln!("?DONE: {}/{}", done, length);
+}
+
 fn progress_bar_loop(calc_total_rx: Receiver<u64>, calc_count_rx: Receiver<u64>) {
     let bars = MultiProgress::new();
     let style = ProgressStyle::with_template("{msg} [{bar:40.cyan/blue}] {pos:>7}/{len:7}")
@@ -146,8 +160,14 @@ fn progress_bar_loop(calc_total_rx: Receiver<u64>, calc_count_rx: Receiver<u64>)
     let calc_bar = bars.add(ProgressBar::new(0));
     calc_bar.set_style(style.clone());
     calc_bar.set_message("Calculating signatures");
+    calc_bar.length();
 
     let mut calc_total_rx = Some(calc_total_rx);
+
+    #[cfg(feature = "instrumentation")]
+    let mut total = 0;
+    #[cfg(feature = "instrumentation")]
+    let mut next_total = 0;
 
     loop {
         select! {
@@ -159,7 +179,18 @@ fn progress_bar_loop(calc_total_rx: Receiver<u64>, calc_count_rx: Receiver<u64>)
                 Err(_) => calc_total_rx = None,
             },
             recv(calc_count_rx) -> msg => match msg {
-                Ok(msg) => calc_bar.inc(msg),
+                Ok(msg) => {
+                    #[cfg(feature = "instrumentation")]
+                    {
+                        total += msg;
+                        if total > next_total {
+                            instrumentation(total, calc_bar.length().unwrap_or(0));
+                            next_total += 100;
+                        }
+                    }
+
+                    calc_bar.inc(msg)
+                },
                 Err(_) => break,
             },
         }
@@ -363,7 +394,13 @@ fn main_signatures(cli: Cli) {
         .or_else(|| platform_dirs::AppDirs::new(Some("simagef"), false).map(|v| v.cache_dir));
 
     if cli.print_database_location {
-        println!("{}", db_path.expect("Unable to figure out database path").to_str().expect("Unable to format database path"));
+        println!(
+            "{}",
+            db_path
+                .expect("Unable to figure out database path")
+                .to_str()
+                .expect("Unable to format database path")
+        );
         exit(0);
     }
 
@@ -506,7 +543,7 @@ fn main_signatures(cli: Cli) {
             let (_, image2) = pair.index2;
             let filename1 = &image1.path;
             let filename2 = &image2.path;
-            println!("{} {}", filename1, filename2);
+            print_fmt(&vec![filename1, filename2], cli.format);
             if let Some((program, args)) = &executable {
                 Command::new(program)
                     .args(args)
@@ -528,7 +565,7 @@ fn main_signatures(cli: Cli) {
     let image_map: Vec<String> = images.iter().map(|(_, s)| s.path.clone()).collect();
 
     if !cli.pairs {
-        make_groups_and_exec(&image_map, pairings, &executable);
+        make_groups_and_exec(&image_map, pairings, &executable, cli.format);
     }
 }
 

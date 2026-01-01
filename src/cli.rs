@@ -1,4 +1,40 @@
+use std::fmt::Display;
+
 use clap::Parser;
+
+#[derive(Debug, Clone, Copy)]
+pub enum Fmt {
+    /// Filenames are separated by spaces. Groups are separated by newlines.
+    /// Spaces in paths are ambiguous.
+    Regular,
+    /// Same as regular, but each filename is written in quotemarks. Quotemarks
+    /// in the path are escaped with a backslash.
+    Quote,
+    /// Filenames are separated by NUL characters. Groups are separated by
+    /// two consecutive NUL characters.
+    Null,
+}
+
+impl Display for Fmt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fmt::Regular => f.write_str("regular"),
+            Fmt::Quote => f.write_str("quote"),
+            Fmt::Null => f.write_str("null"),
+        }
+    }
+}
+
+impl From<&str> for Fmt {
+    fn from(value: &str) -> Self {
+        match value {
+            "regular" => Self::Regular,
+            "quote" => Self::Quote,
+            "null" => Self::Null,
+            _ => panic!("Unknown option for --format"),
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -34,4 +70,7 @@ pub struct Cli {
     /// The files to compare. If one of these is a dash '-' the program will
     /// also read filenames from stdin.
     pub files: Vec<String>,
+    /// Format to use for printing the filenames - regular, quote, null.
+    #[arg(long, default_value_t = Fmt::Regular)]
+    pub format: Fmt,
 }
