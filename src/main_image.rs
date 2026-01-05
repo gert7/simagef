@@ -12,9 +12,9 @@ use image_compare::BlendInput;
 
 use crate::{
     cli::Cli,
-    open_image::{open_image, resize_as_needed, IBoft, SingleImage},
-    shared::{make_groups_and_exec, CompareTask, Pairing},
     formatting::print_fmt,
+    open_image::{open_image, resize_as_needed, IBoft, SingleImage},
+    shared::{get_executable, make_groups_and_exec, CompareTask, Pairing},
 };
 struct ImageToCompare {
     path: String,
@@ -41,7 +41,7 @@ fn image_maker_loop(
                     Ok(image) => {
                         let image = resize_as_needed(image, width, height);
                         tx.send(ImageToCompare {
-                            path: filename,
+                            path: filename.to_string(),
                             image,
                         })
                         .expect("Unable to send image to channel");
@@ -89,12 +89,12 @@ pub fn main_images(cli: Cli) {
         exit(1);
     }
 
-    for arg_filename in cli.files {
+    for arg_filename in &cli.files {
         if arg_filename == "-" {
             dash_mode = true;
         } else {
             filename_tx
-                .send(arg_filename)
+                .send(arg_filename.clone())
                 .expect("Unable to send filename to channel");
         }
     }
@@ -241,14 +241,7 @@ pub fn main_images(cli: Cli) {
 
     let mut pairings = Vec::new();
 
-    let executable = {
-        cli.exec.as_ref().map(|exec| {
-            let mut split = exec.split(" ");
-            let command = split.next().expect("Command for exec not provided");
-            let rest: Vec<&str> = split.collect();
-            (command, rest)
-        })
-    };
+    let executable = get_executable(&cli);
 
     // If we use pairs, we execute for each pair right away.
     while let Ok(pair) = pair_rx.recv() {
@@ -259,6 +252,7 @@ pub fn main_images(cli: Cli) {
             let filename1 = bundle.image_map[pair.index1].path.clone();
             let filename2 = bundle.image_map[pair.index2].path.clone();
             print_fmt(&vec![&filename1, &filename2], cli.format);
+            #[cfg(not(feature = "no-exec"))]
             if let Some((program, args)) = &executable {
                 Command::new(program)
                     .args(args)

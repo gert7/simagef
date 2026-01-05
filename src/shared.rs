@@ -3,6 +3,8 @@ use std::{
     process::Command,
 };
 
+use crate::cli::Cli;
+
 #[derive(Debug)]
 pub struct CompareTask {
     pub index1: usize,
@@ -23,11 +25,10 @@ pub fn make_groups_and_exec(
 ) {
     let groups = make_groups(pairings);
     for group in groups {
-        let name_group: Vec<String> = group.iter().map(|index| {
-            name_map[*index].clone()
-        }).collect();
+        let name_group: Vec<String> = group.iter().map(|index| name_map[*index].clone()).collect();
         let line = name_group.join(" ");
         println!("{}", line);
+        #[cfg(not(feature = "no-exec"))]
         if let Some((program, args)) = &executable {
             Command::new(program)
                 .args(args)
@@ -81,4 +82,19 @@ pub fn make_groups(pairs: Vec<Pairing>) -> Vec<Vec<usize>> {
     }
 
     groups
+}
+
+#[cfg(not(feature = "no-exec"))]
+pub fn get_executable(cli: &Cli) -> Option<(&str, Vec<&str>)> {
+    cli.exec.as_ref().map(|exec| {
+        let mut split = exec.split(" ");
+        let command = split.next().expect("Command for exec not provided");
+        let rest: Vec<&str> = split.collect();
+        (command, rest)
+    })
+}
+
+#[cfg(feature = "no-exec")]
+pub fn get_executable(cli: &Cli) -> Option<(&str, Vec<&str>)> {
+    None
 }

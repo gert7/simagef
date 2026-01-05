@@ -48,6 +48,7 @@ pub struct Cli {
     /// The program to launch when the comparisons are finished.
     /// The program will be launched for each pair or grouping, one after another.
     #[arg(short('e'), long)]
+    #[cfg(not(feature = "no-exec"))]
     pub exec: Option<String>,
     /// If set, will only present the matched images in pairs rather than groups.
     #[arg(short('p'), long, default_value_t = false)]

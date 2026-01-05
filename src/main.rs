@@ -28,7 +28,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusqlite::Connection;
 
 use crate::{
-    cli::Fmt, database::InsertionMessage, formatting::print_fmt, open_image::open_image_path,
+    cli::Fmt, database::InsertionMessage, formatting::print_fmt, open_image::open_image_path, shared::get_executable,
 };
 
 struct SignatureToCompare {
@@ -110,6 +110,7 @@ fn make_groups_and_exec<P>(
             .map(|index| name_map[*index].as_ref())
             .collect();
         print_fmt(&name_group, fmt);
+        #[cfg(not(feature = "no-exec"))]
         if let Some((program, args)) = &executable {
             Command::new(program)
                 .args(args)
@@ -390,6 +391,7 @@ fn spawn_cosine_threads(threshold: f64, task_rx: Receiver<CompareTask>, pair_tx:
 fn main_signatures(cli: Cli) {
     let db_path = cli
         .database_file
+        .as_ref()
         .map(|path| PathBuf::from(path))
         .or_else(|| platform_dirs::AppDirs::new(Some("simagef"), false).map(|v| v.cache_dir));
 
@@ -527,14 +529,7 @@ fn main_signatures(cli: Cli) {
 
     let mut pairings = Vec::new();
 
-    let executable = {
-        cli.exec.as_ref().map(|exec| {
-            let mut split = exec.split(" ");
-            let command = split.next().expect("Command for exec not provided");
-            let rest: Vec<&str> = split.collect();
-            (command, rest)
-        })
-    };
+    let executable = get_executable(&cli);
 
     while let Ok(pair) = pair_rx.recv() {
         // If we use pairs, we execute for each pair right away.
@@ -544,6 +539,7 @@ fn main_signatures(cli: Cli) {
             let filename1 = &image1.path;
             let filename2 = &image2.path;
             print_fmt(&vec![filename1, filename2], cli.format);
+            #[cfg(not(feature = "no-exec"))]
             if let Some((program, args)) = &executable {
                 Command::new(program)
                     .args(args)

@@ -107,6 +107,14 @@ subsequent runs in the default mode. Signatures will be stored in your cache
 directory in a SQLite database file named `simagef`. You can disable this with
 the `--no-database` option.
 
+### Feature flags
+
+- `avif` - Enables AVIF support. Requires [libdav1d](https://github.com/videolan/dav1d).
+
+- `no-exec` - Disables the `exec` option.
+
+- `pixel` - Enables the old pixel algorithm.
+
 ## Caveats
 
 - The groups are created using a recursive graph algorithm.
